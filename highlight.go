@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -28,11 +29,16 @@ const (
 	colorStatus4xx = "\033[33m"
 	colorStatus5xx = "\033[31m"
 	colorReqMarker = "\033[33m"
-	colorResMarker = "\033[36m"
+	colorResMarker = "\033[95m"
+	colorTime      = "\033[90m"
 )
 
 func wrapColor(s, color string) string {
 	return color + s + colorReset
+}
+
+func coloredTime(t time.Time) string {
+	return wrapColor(t.Format("2006/01/02 15:04:05"), colorTime)
 }
 
 func highlightJSONValue(v interface{}, indent int) string {

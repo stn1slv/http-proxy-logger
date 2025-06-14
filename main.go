@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 // reqCounter is a global atomic counter for request/response pairs.
@@ -70,7 +71,7 @@ func (DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	headers = append(highlightHeaders(headers, true), []byte("\r\n\r\n")...)
 	if *logRequests {
 		line := colorReqMarker + "--- REQUEST " + strconv.Itoa(int(counter)) + " ---" + colorReset
-		log.Printf("%s\n\n%s%s\n\n", line, string(headers), string(body))
+		log.Printf("%s %s\n\n%s%s\n\n", coloredTime(time.Now()), line, string(headers), string(body))
 	}
 
 	response, err := http.DefaultTransport.RoundTrip(r)
@@ -99,7 +100,7 @@ func (DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 	if *logResponses {
 		line := colorResMarker + "--- RESPONSE " + strconv.Itoa(int(counter)) + " [" + response.Status + "] ---" + colorReset
-		log.Printf("%s\n\n%s%s\n\n", line, string(headerDump), string(decoded))
+		log.Printf("%s %s\n\n%s%s\n\n", coloredTime(time.Now()), line, string(headerDump), string(decoded))
 	}
 	// restore body again for proxying
 	response.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
@@ -135,8 +136,9 @@ func getTarget() string {
 // main is the entry point. It sets up the reverse proxy and starts the HTTP server.
 func main() {
 	flag.Parse()
+	log.SetFlags(0)
 	target, _ := url.Parse(getTarget())
-	log.Printf("Forwarding %s -> %s\n", getListenAddress(), target)
+	log.Printf("%s %s -> %s\n", coloredTime(time.Now()), getListenAddress(), target)
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
 
