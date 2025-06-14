@@ -11,6 +11,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 )
@@ -68,7 +69,8 @@ func (DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	headers = append(highlightHeaders(headers, true), []byte("\r\n\r\n")...)
 	if *logRequests {
-		log.Printf("---REQUEST %d---\n\n%s%s\n\n", counter, string(headers), string(body))
+		line := colorReqMarker + "--- REQUEST " + strconv.Itoa(int(counter)) + " ---" + colorReset
+		log.Printf("%s\n\n%s%s\n\n", line, string(headers), string(body))
 	}
 
 	response, err := http.DefaultTransport.RoundTrip(r)
@@ -96,7 +98,8 @@ func (DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	headerDump = append(highlightHeaders(bytes.TrimSuffix(headerDump, []byte("\r\n\r\n")), false), []byte("\r\n\r\n")...)
 
 	if *logResponses {
-		log.Printf("---RESPONSE %d---\n\n%s%s\n\n", counter, string(headerDump), string(decoded))
+		line := colorResMarker + "--- RESPONSE " + strconv.Itoa(int(counter)) + " [" + response.Status + "] ---" + colorReset
+		log.Printf("%s\n\n%s%s\n\n", line, string(headerDump), string(decoded))
 	}
 	// restore body again for proxying
 	response.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))

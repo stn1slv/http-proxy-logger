@@ -27,6 +27,8 @@ const (
 	colorStatus3xx = "\033[36m"
 	colorStatus4xx = "\033[33m"
 	colorStatus5xx = "\033[31m"
+	colorReqMarker = "\033[33m"
+	colorResMarker = "\033[36m"
 )
 
 func wrapColor(s, color string) string {
