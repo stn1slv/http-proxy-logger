@@ -54,7 +54,7 @@ func decodeBody(encoding string, body []byte) ([]byte, error) {
 
 // coloredTimeWithColor returns the formatted time string wrapped in the given color.
 func coloredTimeWithColor(t time.Time, color string) string {
-	return wrapColor(t.Format("2006/01/02 15:04:05"), color)
+	return wrapColor("["+t.Format("2006/01/02 15:04:05")+"]", color)
 }
 
 // RoundTrip implements the http.RoundTripper interface.

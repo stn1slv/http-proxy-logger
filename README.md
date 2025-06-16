@@ -9,7 +9,7 @@ header names, and JSON or XML bodies are highlighted for readability.
 ## Example output
 
 ```http
-2021/05/05 03:50:44 --- REQUEST 3 ---
+[2021/05/05 03:50:44] --- REQUEST 3 ---
 
 POST /mocking/contacts HTTP/1.1
 Host: demo7704619.mockable.io
@@ -26,7 +26,7 @@ X-Forwarded-For: 172.17.0.1
     "lastName": "Deviatov"
 }
 
-2021/05/05 03:50:44 --- RESPONSE 3 (201 Created) ---
+[2021/05/05 03:50:44] --- RESPONSE 3 (201 Created) ---
 
 HTTP/1.1 201 Created
 Content-Length: 68

@@ -38,7 +38,7 @@ func wrapColor(s, color string) string {
 }
 
 func coloredTime(t time.Time) string {
-	return wrapColor(t.Format("2006/01/02 15:04:05"), colorTime)
+	return wrapColor("["+t.Format("2006/01/02 15:04:05")+"]", colorTime)
 }
 
 func highlightJSONValue(v interface{}, indent int) string {
