@@ -67,10 +67,20 @@ Set the `TARGET` environment variable to the upstream server and optionally
 Use the `-requests` and `-responses` flags to control which messages are
 printed. Both default to `true`.
 
+Use the `-no-color` flag to disable colored output and remove ANSI color codes
+from the logs, useful for redirecting output to files or when colors are not
+desired.
+
 ### Local execution
 
 ```bash
 ./http-proxy-logger -target http://example.com -port 8888 -responses=false
+```
+
+To disable colored output:
+
+```bash
+./http-proxy-logger -target http://example.com -port 8888 -no-color=true
 ```
 
 ### Docker
@@ -82,8 +92,8 @@ docker run --rm -it -p 8888:8888 \
   -port 8888
 ```
 Add `-responses=false` to log only requests or `-requests=false` to log only
-responses. Flags `-target` and `-port` may be used instead of the corresponding
-environment variables.
+responses. Add `-no-color=true` to disable colored output. Flags `-target` and 
+`-port` may be used instead of the corresponding environment variables.
 
 The proxy will forward traffic to the target and log each request/response pair
 using the format shown above.

@@ -34,10 +34,16 @@ const (
 )
 
 func wrapColor(s, color string) string {
+	if *noColor {
+		return s
+	}
 	return color + s + colorReset
 }
 
 func coloredTime(t time.Time) string {
+	if *noColor {
+		return "[" + t.Format("2006/01/02 15:04:05") + "]"
+	}
 	return wrapColor("["+t.Format("2006/01/02 15:04:05")+"]", colorTime)
 }
 

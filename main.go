@@ -25,6 +25,7 @@ var logRequests = flag.Bool("requests", true, "log HTTP requests")
 var logResponses = flag.Bool("responses", true, "log HTTP responses")
 var cliTarget = flag.String("target", "", "upstream target URL (overrides TARGET)")
 var cliPort = flag.String("port", "", "listen port (overrides PORT)")
+var noColor = flag.Bool("no-color", false, "disable colored output")
 
 // DebugTransport is a custom http.RoundTripper that logs requests and responses.
 type DebugTransport struct{}
@@ -54,6 +55,9 @@ func decodeBody(encoding string, body []byte) ([]byte, error) {
 
 // coloredTimeWithColor returns the formatted time string wrapped in the given color.
 func coloredTimeWithColor(t time.Time, color string) string {
+	if *noColor {
+		return "[" + t.Format("2006/01/02 15:04:05") + "]"
+	}
 	return wrapColor("["+t.Format("2006/01/02 15:04:05")+"]", color)
 }
 
@@ -76,6 +80,9 @@ func (DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	headers = append(highlightHeaders(headers, true), []byte("\r\n\r\n")...)
 	if *logRequests {
 		line := colorReqMarker + "--- REQUEST " + strconv.Itoa(int(counter)) + " ---" + colorReset
+		if *noColor {
+			line = "--- REQUEST " + strconv.Itoa(int(counter)) + " ---"
+		}
 		log.Printf("%s %s\n\n%s%s\n\n", coloredTimeWithColor(time.Now(), colorReqMarker), line, string(headers), string(body))
 	}
 
@@ -105,6 +112,9 @@ func (DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 	if *logResponses {
 		line := colorResMarker + "--- RESPONSE " + strconv.Itoa(int(counter)) + " (" + response.Status + ") ---" + colorReset
+		if *noColor {
+			line = "--- RESPONSE " + strconv.Itoa(int(counter)) + " (" + response.Status + ") ---"
+		}
 		log.Printf("%s %s\n\n%s%s\n\n", coloredTimeWithColor(time.Now(), colorResMarker), line, string(headerDump), string(decoded))
 	}
 	// restore body again for proxying
