@@ -157,3 +157,146 @@ func TestHighlightXMLInvalid(t *testing.T) {
 		t.Errorf("Invalid XML should be returned as-is, got: %q", result)
 	}
 }
+
+func TestXMLInlineTextFormatting(t *testing.T) {
+	// Reset flags
+	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+	noColor = flag.Bool("no-color", true, "disable colored output")
+
+	// Test case: SOAP request with simple text elements
+	soapRequest := []byte(`<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body>
+    <Subtract xmlns="http://tempuri.org/">
+      <intA>15</intA>
+      <intB>5</intB>
+    </Subtract>
+  </soap:Body>
+</soap:Envelope>`)
+
+	result := highlightBody(soapRequest, "text/xml")
+	resultStr := string(result)
+
+	// Check that simple text elements are formatted inline (not on separate lines)
+	// The pattern should be <intA>...text...</intA> on one line
+	// We use regex/contains to account for whitespace in the original XML
+
+	// Check that intA element contains inline text (no newline between opening and closing tag)
+	if !strings.Contains(resultStr, "<intA>15") && !strings.Contains(resultStr, "</intA>") {
+		t.Errorf("Expected '<intA>' element to contain '15' inline, got:\n%s", resultStr)
+	}
+
+	if !strings.Contains(resultStr, "<intB>5") && !strings.Contains(resultStr, "</intB>") {
+		t.Errorf("Expected '<intB>' element to contain '5' inline, got:\n%s", resultStr)
+	}
+
+	// Verify that the elements are truly inline by checking there's no newline between tag and text
+	// Count lines - if formatted correctly, intA and intB should each be on single lines
+	lines := strings.Split(resultStr, "\n")
+	foundIntAInline := false
+	foundIntBInline := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "<intA>") && strings.HasSuffix(trimmed, "</intA>") {
+			foundIntAInline = true
+		}
+		if strings.HasPrefix(trimmed, "<intB>") && strings.HasSuffix(trimmed, "</intB>") {
+			foundIntBInline = true
+		}
+	}
+
+	if !foundIntAInline {
+		t.Errorf("Expected '<intA>' element with text to be on a single line, got:\n%s", resultStr)
+	}
+
+	if !foundIntBInline {
+		t.Errorf("Expected '<intB>' element with text to be on a single line, got:\n%s", resultStr)
+	}
+
+	// Check that parent elements with nested children still have proper line breaks
+	if !strings.Contains(resultStr, "<soap:Body>\n") {
+		t.Errorf("Expected '<soap:Body>' to be followed by a newline (has nested children), got:\n%s", resultStr)
+	}
+
+	// Verify namespace preservation
+	if !strings.Contains(resultStr, "soap:Envelope") {
+		t.Errorf("Expected 'soap:Envelope' namespace prefix to be preserved, got:\n%s", resultStr)
+	}
+
+	t.Logf("✓ XML inline text formatting is working correctly:\n%s", resultStr)
+}
+
+func TestXMLMixedContent(t *testing.T) {
+	// Reset flags
+	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+	noColor = flag.Bool("no-color", true, "disable colored output")
+
+	// Test various element types: simple text, nested elements, empty elements
+	xmlBody := []byte(`<?xml version="1.0"?>
+<root>
+  <simpleText>Hello World</simpleText>
+  <parent>
+    <child1>Value 1</child1>
+    <child2>Value 2</child2>
+  </parent>
+  <number>42</number>
+</root>`)
+
+	result := highlightBody(xmlBody, "application/xml")
+	resultStr := string(result)
+
+	// Check inline formatting by verifying elements are on single lines
+	lines := strings.Split(resultStr, "\n")
+
+	foundSimpleTextInline := false
+	foundChild1Inline := false
+	foundChild2Inline := false
+	foundNumberInline := false
+	foundParentWithNewline := false
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmed, "<simpleText>") && strings.HasSuffix(trimmed, "</simpleText>") {
+			foundSimpleTextInline = true
+		}
+		if strings.HasPrefix(trimmed, "<child1>") && strings.HasSuffix(trimmed, "</child1>") {
+			foundChild1Inline = true
+		}
+		if strings.HasPrefix(trimmed, "<child2>") && strings.HasSuffix(trimmed, "</child2>") {
+			foundChild2Inline = true
+		}
+		if strings.HasPrefix(trimmed, "<number>") && strings.HasSuffix(trimmed, "</number>") {
+			foundNumberInline = true
+		}
+		if strings.Contains(trimmed, "<parent>") && i+1 < len(lines) {
+			// Parent should have newline after it (not inline with closing tag)
+			nextLine := strings.TrimSpace(lines[i+1])
+			if strings.HasPrefix(nextLine, "<child1>") {
+				foundParentWithNewline = true
+			}
+		}
+	}
+
+	if !foundSimpleTextInline {
+		t.Errorf("Expected '<simpleText>' with text to be on single line, got:\n%s", resultStr)
+	}
+
+	if !foundChild1Inline {
+		t.Errorf("Expected '<child1>' with text to be on single line, got:\n%s", resultStr)
+	}
+
+	if !foundChild2Inline {
+		t.Errorf("Expected '<child2>' with text to be on single line, got:\n%s", resultStr)
+	}
+
+	if !foundNumberInline {
+		t.Errorf("Expected '<number>' with text to be on single line, got:\n%s", resultStr)
+	}
+
+	if !foundParentWithNewline {
+		t.Errorf("Expected '<parent>' to be followed by newline (has nested children), got:\n%s", resultStr)
+	}
+
+	t.Logf("✓ XML mixed content formatting is working correctly:\n%s", resultStr)
+}
