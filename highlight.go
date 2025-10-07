@@ -115,13 +115,7 @@ func highlightXML(data []byte) string {
 	// We need to track namespace prefixes as we encounter them
 	nsPrefixes := make(map[string]string) // maps namespace URL to prefix
 
-	// Peek ahead to check if next token is simple CharData
-	type TokenInfo struct {
-		tok xml.Token
-		err error
-	}
-
-	tokens := []TokenInfo{}
+	tokens := []xml.Token{}
 	// First pass: collect all tokens
 	for {
 		tok, err := dec.Token()
@@ -131,16 +125,14 @@ func highlightXML(data []byte) string {
 		if err != nil {
 			return string(data)
 		}
-		tokens = append(tokens, TokenInfo{xml.CopyToken(tok), err})
+		tokens = append(tokens, xml.CopyToken(tok))
 	}
 
 	justWroteStartTag := false
 	justWroteInlineText := false
 
 	for i := 0; i < len(tokens); i++ {
-		t := tokens[i]
-
-		switch tok := t.tok.(type) {
+		switch tok := tokens[i].(type) {
 		case xml.StartElement:
 			// Check for namespace declarations in attributes
 			var nsAttrs []xml.Attr
@@ -171,22 +163,22 @@ func highlightXML(data []byte) string {
 			// Check if next token is simple text (not another element)
 			hasSimpleText := false
 			if i+1 < len(tokens) {
-				if charData, ok := tokens[i+1].tok.(xml.CharData); ok {
+				if charData, ok := tokens[i+1].(xml.CharData); ok {
 					txt := strings.TrimSpace(string(charData))
 					if txt != "" {
 						// Check if the token after CharData is EndElement
 						// (or if there's whitespace CharData, check after that)
 						nextEndIdx := i + 2
 						for nextEndIdx < len(tokens) {
-							if _, ok := tokens[nextEndIdx].tok.(xml.CharData); ok {
+							if _, ok := tokens[nextEndIdx].(xml.CharData); ok {
 								// Skip whitespace-only CharData
-								if strings.TrimSpace(string(tokens[nextEndIdx].tok.(xml.CharData))) == "" {
+								if strings.TrimSpace(string(tokens[nextEndIdx].(xml.CharData))) == "" {
 									nextEndIdx++
 									continue
 								}
 								break
 							}
-							if _, isEndElement := tokens[nextEndIdx].tok.(xml.EndElement); isEndElement {
+							if _, isEndElement := tokens[nextEndIdx].(xml.EndElement); isEndElement {
 								hasSimpleText = true
 							}
 							break

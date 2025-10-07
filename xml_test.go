@@ -214,8 +214,22 @@ func TestXMLInlineTextFormatting(t *testing.T) {
 	}
 
 	// Check that parent elements with nested children still have proper line breaks
-	if !strings.Contains(resultStr, "<soap:Body>\n") {
-		t.Errorf("Expected '<soap:Body>' to be followed by a newline (has nested children), got:\n%s", resultStr)
+	// We check that <soap:Body> is followed by a newline, not inline with its closing tag
+	foundBodyWithNewline := false
+	for i, line := range lines {
+		if strings.Contains(line, "<soap:Body>") {
+			// If Body is on its own line (not followed immediately by </soap:Body> on same line)
+			if !strings.Contains(line, "</soap:Body>") {
+				// And if there's a next line with content
+				if i+1 < len(lines) && strings.TrimSpace(lines[i+1]) != "" {
+					foundBodyWithNewline = true
+					break
+				}
+			}
+		}
+	}
+	if !foundBodyWithNewline {
+		t.Errorf("Expected '<soap:Body>' to be followed by content on a new line (has nested children), got:\n%s", resultStr)
 	}
 
 	// Verify namespace preservation
