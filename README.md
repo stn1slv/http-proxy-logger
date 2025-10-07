@@ -71,6 +71,10 @@ Use the `-no-color` flag to disable colored output and remove ANSI color codes
 from the logs, useful for redirecting output to files or when colors are not
 desired.
 
+The tool automatically highlights JSON and XML bodies with syntax coloring and
+proper formatting while preserving important structural information like XML
+namespaces and namespace prefixes (e.g., `soapenv:Envelope`).
+
 ### Local execution
 
 ```bash
