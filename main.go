@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/andybalholm/brotli"
 )
 
 // reqCounter is a global atomic counter for request/response pairs.
@@ -30,7 +32,7 @@ var noColor = flag.Bool("no-color", false, "disable colored output")
 // DebugTransport is a custom http.RoundTripper that logs requests and responses.
 type DebugTransport struct{}
 
-// decodeBody decompresses the body if the encoding is gzip or deflate.
+// decodeBody decompresses the body if the encoding is gzip, deflate, or br.
 // Returns the decoded body or the original if no decoding is needed.
 func decodeBody(encoding string, body []byte) ([]byte, error) {
 	switch strings.ToLower(strings.TrimSpace(encoding)) {
@@ -47,6 +49,9 @@ func decodeBody(encoding string, body []byte) ([]byte, error) {
 			return nil, err
 		}
 		defer r.Close()
+		return io.ReadAll(r)
+	case "br":
+		r := brotli.NewReader(bytes.NewReader(body))
 		return io.ReadAll(r)
 	default:
 		return body, nil
