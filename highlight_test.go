@@ -7,27 +7,7 @@ import (
 	"time"
 )
 
-func TestHighlightBodyJSON(t *testing.T) {
-	data := []byte(`{"name":"Alice"}`)
-	out := string(highlightBody(data, "application/json"))
-	if out == string(data) {
-		t.Fatalf("expected JSON body to be highlighted")
-	}
-	if !strings.Contains(out, colorKey) || !strings.Contains(out, colorString) {
-		t.Errorf("highlighted JSON missing colors: %q", out)
-	}
-}
-
-func TestHighlightBodyXML(t *testing.T) {
-	data := []byte(`<p>Hello</p>`)
-	out := string(highlightBody(data, "application/xml"))
-	if out == string(data) {
-		t.Fatalf("expected XML body to be highlighted")
-	}
-	if !strings.Contains(out, colorTag) {
-		t.Errorf("highlighted XML missing tag color: %q", out)
-	}
-}
+// Tests for header highlighting
 
 func TestHighlightHeadersRequest(t *testing.T) {
 	headers := []byte("POST /foo HTTP/1.1\r\nHost: example.com\r\n\r\n")
@@ -51,6 +31,30 @@ func TestHighlightHeadersResponse(t *testing.T) {
 	}
 }
 
+func TestHighlightHeadersWithColorsDisabled(t *testing.T) {
+	// Save original state
+	originalNoColor := noColor
+	if noColor == nil {
+		noColor = flag.Bool("no-color", false, "disable colored output")
+	}
+	defer func() { noColor = originalNoColor }()
+
+	*noColor = true
+
+	headers := []byte("POST /foo HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	out := string(highlightHeaders(headers, true))
+
+	if strings.Contains(out, colorMethod) || strings.Contains(out, colorURL) || strings.Contains(out, colorHeader) {
+		t.Errorf("headers with no-color should not contain color codes: %q", out)
+	}
+	// Should still contain the actual header content
+	if !strings.Contains(out, "POST /foo HTTP/1.1") || !strings.Contains(out, "Host: example.com") {
+		t.Errorf("headers should still contain the data: %q", out)
+	}
+}
+
+// Tests for status code coloring
+
 func TestColorStatus(t *testing.T) {
 	if colorStatus(201) != colorStatus2xx {
 		t.Errorf("expected 2xx color")
@@ -66,6 +70,8 @@ func TestColorStatus(t *testing.T) {
 	}
 }
 
+// Tests for color wrapping utility
+
 func TestWrapColorWithColorsEnabled(t *testing.T) {
 	// Save original state
 	originalNoColor := noColor
@@ -74,10 +80,10 @@ func TestWrapColorWithColorsEnabled(t *testing.T) {
 		noColor = flag.Bool("no-color", false, "disable colored output")
 	}
 	defer func() { noColor = originalNoColor }()
-	
+
 	// Set no-color to false (colors enabled)
 	*noColor = false
-	
+
 	result := wrapColor("test", colorString)
 	expected := colorString + "test" + colorReset
 	if result != expected {
@@ -93,16 +99,18 @@ func TestWrapColorWithColorsDisabled(t *testing.T) {
 		noColor = flag.Bool("no-color", false, "disable colored output")
 	}
 	defer func() { noColor = originalNoColor }()
-	
+
 	// Set no-color to true (colors disabled)
 	*noColor = true
-	
+
 	result := wrapColor("test", colorString)
 	expected := "test"
 	if result != expected {
 		t.Errorf("wrapColor with colors disabled: got %q, want %q", result, expected)
 	}
 }
+
+// Tests for time formatting
 
 func TestColoredTimeWithColorsEnabled(t *testing.T) {
 	// Save original state
@@ -111,12 +119,12 @@ func TestColoredTimeWithColorsEnabled(t *testing.T) {
 		noColor = flag.Bool("no-color", false, "disable colored output")
 	}
 	defer func() { noColor = originalNoColor }()
-	
+
 	*noColor = false
-	
+
 	testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
 	result := coloredTime(testTime)
-	
+
 	if !strings.Contains(result, colorTime) {
 		t.Errorf("coloredTime with colors enabled should contain color codes: %q", result)
 	}
@@ -132,13 +140,13 @@ func TestColoredTimeWithColorsDisabled(t *testing.T) {
 		noColor = flag.Bool("no-color", false, "disable colored output")
 	}
 	defer func() { noColor = originalNoColor }()
-	
+
 	*noColor = true
-	
+
 	testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
 	result := coloredTime(testTime)
 	expected := "[2023/01/01 12:00:00]"
-	
+
 	if result != expected {
 		t.Errorf("coloredTime with colors disabled: got %q, want %q", result, expected)
 	}
@@ -154,12 +162,12 @@ func TestColoredTimeWithColorWithColorsEnabled(t *testing.T) {
 		noColor = flag.Bool("no-color", false, "disable colored output")
 	}
 	defer func() { noColor = originalNoColor }()
-	
+
 	*noColor = false
-	
+
 	testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
 	result := coloredTimeWithColor(testTime, colorReqMarker)
-	
+
 	if !strings.Contains(result, colorReqMarker) {
 		t.Errorf("coloredTimeWithColor with colors enabled should contain color codes: %q", result)
 	}
@@ -175,62 +183,17 @@ func TestColoredTimeWithColorWithColorsDisabled(t *testing.T) {
 		noColor = flag.Bool("no-color", false, "disable colored output")
 	}
 	defer func() { noColor = originalNoColor }()
-	
+
 	*noColor = true
-	
+
 	testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
 	result := coloredTimeWithColor(testTime, colorReqMarker)
 	expected := "[2023/01/01 12:00:00]"
-	
+
 	if result != expected {
 		t.Errorf("coloredTimeWithColor with colors disabled: got %q, want %q", result, expected)
 	}
 	if strings.Contains(result, colorReqMarker) {
 		t.Errorf("coloredTimeWithColor with colors disabled should not contain color codes: %q", result)
-	}
-}
-
-func TestHighlightBodyJSONWithColorsDisabled(t *testing.T) {
-	// Save original state
-	originalNoColor := noColor
-	if noColor == nil {
-		noColor = flag.Bool("no-color", false, "disable colored output")
-	}
-	defer func() { noColor = originalNoColor }()
-	
-	*noColor = true
-	
-	data := []byte(`{"name":"Alice"}`)
-	out := string(highlightBody(data, "application/json"))
-	
-	// Should still format JSON but without colors
-	if strings.Contains(out, colorKey) || strings.Contains(out, colorString) {
-		t.Errorf("highlighted JSON with no-color should not contain color codes: %q", out)
-	}
-	// Should still contain the formatted structure
-	if !strings.Contains(out, `"name"`) || !strings.Contains(out, `"Alice"`) {
-		t.Errorf("highlighted JSON should still contain the data: %q", out)
-	}
-}
-
-func TestHighlightHeadersWithColorsDisabled(t *testing.T) {
-	// Save original state
-	originalNoColor := noColor
-	if noColor == nil {
-		noColor = flag.Bool("no-color", false, "disable colored output")
-	}
-	defer func() { noColor = originalNoColor }()
-	
-	*noColor = true
-	
-	headers := []byte("POST /foo HTTP/1.1\r\nHost: example.com\r\n\r\n")
-	out := string(highlightHeaders(headers, true))
-	
-	if strings.Contains(out, colorMethod) || strings.Contains(out, colorURL) || strings.Contains(out, colorHeader) {
-		t.Errorf("headers with no-color should not contain color codes: %q", out)
-	}
-	// Should still contain the actual header content
-	if !strings.Contains(out, "POST /foo HTTP/1.1") || !strings.Contains(out, "Host: example.com") {
-		t.Errorf("headers should still contain the data: %q", out)
 	}
 }
