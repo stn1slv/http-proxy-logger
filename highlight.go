@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"io"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+const xmlnsPrefix = "xmlns"
 
 const (
 	colorReset     = "\033[0m"
@@ -40,23 +43,20 @@ func wrapColor(s, color string) string {
 	return color + s + colorReset
 }
 
-func coloredTime(t time.Time) string {
-	if *noColor {
-		return "[" + t.Format("2006/01/02 15:04:05") + "]"
-	}
-	return wrapColor("["+t.Format("2006/01/02 15:04:05")+"]", colorTime)
+func coloredTime(t time.Time, color string) string {
+	return wrapColor("["+t.Format("2006/01/02 15:04:05")+"]", color)
 }
 
 func highlightJSONValue(v interface{}, indent int) string {
 	switch t := v.(type) {
 	case map[string]interface{}:
-		var keys []string
+		keys := make([]string, 0, len(t))
 		for k := range t {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
 		var b strings.Builder
-		b.WriteString(colorPunct + "{" + colorReset + "\n")
+		b.WriteString(wrapColor("{", colorPunct) + "\n")
 		indent++
 		for i, k := range keys {
 			b.WriteString(strings.Repeat("  ", indent))
@@ -70,11 +70,11 @@ func highlightJSONValue(v interface{}, indent int) string {
 		}
 		indent--
 		b.WriteString(strings.Repeat("  ", indent))
-		b.WriteString(colorPunct + "}" + colorReset)
+		b.WriteString(wrapColor("}", colorPunct))
 		return b.String()
 	case []interface{}:
 		var b strings.Builder
-		b.WriteString(colorPunct + "[" + colorReset + "\n")
+		b.WriteString(wrapColor("[", colorPunct) + "\n")
 		indent++
 		for i, val := range t {
 			b.WriteString(strings.Repeat("  ", indent))
@@ -86,7 +86,7 @@ func highlightJSONValue(v interface{}, indent int) string {
 		}
 		indent--
 		b.WriteString(strings.Repeat("  ", indent))
-		b.WriteString(colorPunct + "]" + colorReset)
+		b.WriteString(wrapColor("]", colorPunct))
 		return b.String()
 	case string:
 		return wrapColor(strconv.Quote(t), colorString)
@@ -119,7 +119,7 @@ func highlightXML(data []byte) string {
 	// First pass: collect all tokens
 	for {
 		tok, err := dec.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -139,15 +139,16 @@ func highlightXML(data []byte) string {
 			var regularAttrs []xml.Attr
 
 			for _, attr := range tok.Attr {
-				if attr.Name.Space == "xmlns" {
+				switch {
+				case attr.Name.Space == xmlnsPrefix:
 					// This is a namespace declaration with prefix: xmlns:prefix="uri"
 					nsPrefixes[attr.Value] = attr.Name.Local
 					nsAttrs = append(nsAttrs, attr)
-				} else if attr.Name.Local == "xmlns" && attr.Name.Space == "" {
+				case attr.Name.Local == xmlnsPrefix && attr.Name.Space == "":
 					// This is the default namespace: xmlns="uri"
 					nsPrefixes[attr.Value] = ""
 					nsAttrs = append(nsAttrs, attr)
-				} else {
+				default:
 					regularAttrs = append(regularAttrs, attr)
 				}
 			}
@@ -170,9 +171,9 @@ func highlightXML(data []byte) string {
 						// (or if there's whitespace CharData, check after that)
 						nextEndIdx := i + 2
 						for nextEndIdx < len(tokens) {
-							if _, ok := tokens[nextEndIdx].(xml.CharData); ok {
+							if cd, ok := tokens[nextEndIdx].(xml.CharData); ok {
 								// Skip whitespace-only CharData
-								if strings.TrimSpace(string(tokens[nextEndIdx].(xml.CharData))) == "" {
+								if strings.TrimSpace(string(cd)) == "" {
 									nextEndIdx++
 									continue
 								}
@@ -195,10 +196,10 @@ func highlightXML(data []byte) string {
 			// Write namespace declarations first
 			for _, attr := range nsAttrs {
 				b.WriteString(" ")
-				if attr.Name.Space == "xmlns" {
+				if attr.Name.Space == xmlnsPrefix {
 					b.WriteString(wrapColor("xmlns:"+attr.Name.Local, colorAttr))
 				} else {
-					b.WriteString(wrapColor("xmlns", colorAttr))
+					b.WriteString(wrapColor(xmlnsPrefix, colorAttr))
 				}
 				b.WriteString(wrapColor("=", colorPunct))
 				b.WriteString(wrapColor("\""+attr.Value+"\"", colorString))
@@ -244,7 +245,7 @@ func highlightXML(data []byte) string {
 			justWroteInlineText = false
 
 		case xml.CharData:
-			txt := strings.TrimSpace(string([]byte(tok)))
+			txt := strings.TrimSpace(string(tok))
 			if len(txt) > 0 {
 				if justWroteStartTag {
 					// Keep text on same line as opening tag
@@ -296,6 +297,8 @@ func highlightBody(data []byte, contentType string) []byte {
 
 func colorStatus(code int) string {
 	switch {
+	case code >= 100 && code < 200:
+		return colorTime
 	case code >= 200 && code < 300:
 		return colorStatus2xx
 	case code >= 300 && code < 400:
