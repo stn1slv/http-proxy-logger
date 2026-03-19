@@ -76,6 +76,11 @@ jobs:
     env:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
+      - name: Check HOMEBREW_TAP_TOKEN
+        if: env.HOMEBREW_TAP_TOKEN == ''
+        run: |
+          echo "::warning::HOMEBREW_TAP_TOKEN secret is not set — skipping Homebrew formula update"
+
       - name: Update Homebrew formula
         if: env.HOMEBREW_TAP_TOKEN != ''
         env:
@@ -105,6 +110,8 @@ jobs:
             version "${VERSION}"
             license "MIT"
 
+            depends_on :macos
+
             on_macos do
               if Hardware::CPU.intel?
                 url "https://github.com/stn1slv/http-proxy-logger/releases/download/${TAG}/http-proxy-logger_darwin_amd64.tar.gz"
@@ -129,12 +136,20 @@ jobs:
           # Push to homebrew-tap via GitHub API
           FORMULA_CONTENT=$(base64 -w 0 formula.rb)
 
-          # Check if file already exists to get its SHA
-          FILE_SHA=$(curl -sSL --retry 3 --retry-delay 5 \
+          # Check if file already exists to get its SHA (404 = new file, other errors = fail)
+          HTTP_CODE=$(curl -sSL --retry 3 --retry-delay 5 -w '%{http_code}' -o /tmp/tap-response.json \
             -H "Authorization: token ${HOMEBREW_TAP_TOKEN}" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/stn1slv/homebrew-tap/contents/Formula/http-proxy-logger.rb" 2>/dev/null \
-            | jq -r '.sha // empty' 2>/dev/null || true)
+            "https://api.github.com/repos/stn1slv/homebrew-tap/contents/Formula/http-proxy-logger.rb")
+          if [ "$HTTP_CODE" = "200" ]; then
+            FILE_SHA=$(jq -r '.sha' /tmp/tap-response.json)
+          elif [ "$HTTP_CODE" = "404" ]; then
+            FILE_SHA=""
+          else
+            echo "::error::GitHub API returned HTTP ${HTTP_CODE} when checking existing formula"
+            cat /tmp/tap-response.json
+            exit 1
+          fi
 
           # Build request body
           if [ -n "$FILE_SHA" ]; then
