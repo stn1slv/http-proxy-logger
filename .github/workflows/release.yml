@@ -38,13 +38,23 @@ jobs:
           for platform in "${platforms[@]}"; do
             GOOS="${platform%/*}"
             GOARCH="${platform#*/}"
-            output="http-proxy-logger-${GOOS}-${GOARCH}"
+            binary="http-proxy-logger"
             if [ "$GOOS" = "windows" ]; then
-              output="${output}.exe"
+              binary="${binary}.exe"
             fi
-            echo "Building ${output}..."
+            echo "Building ${GOOS}/${GOARCH}..."
             CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
-              go build -ldflags="-s -w" -o "$output"
+              go build -ldflags="-s -w" -o "$binary"
+
+            # Create tarball
+            tar czf "http-proxy-logger_${GOOS}_${GOARCH}.tar.gz" "$binary"
+
+            # Rename raw binary for backward compatibility
+            raw="http-proxy-logger-${GOOS}-${GOARCH}"
+            if [ "$GOOS" = "windows" ]; then
+              raw="${raw}.exe"
+            fi
+            mv "$binary" "$raw"
           done
 
       - name: Create release
@@ -58,3 +68,81 @@ jobs:
             http-proxy-logger-windows-arm64.exe
             http-proxy-logger-darwin-amd64
             http-proxy-logger-darwin-arm64
+            http-proxy-logger_*.tar.gz
+
+  update-homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Update Homebrew formula
+        if: env.HOMEBREW_TAP_TOKEN != ''
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Extract version: v.1.2.3 → 1.2.3 or v1.2.3 → 1.2.3
+          VERSION="${TAG#v}"
+          VERSION="${VERSION#.}"
+
+          # Download darwin tarballs and compute SHA256
+          for arch in amd64 arm64; do
+            curl -fsSL "https://github.com/stn1slv/http-proxy-logger/releases/download/${TAG}/http-proxy-logger_darwin_${arch}.tar.gz" \
+              -o "darwin_${arch}.tar.gz"
+          done
+          SHA_AMD64=$(sha256sum darwin_amd64.tar.gz | cut -d' ' -f1)
+          SHA_ARM64=$(sha256sum darwin_arm64.tar.gz | cut -d' ' -f1)
+
+          # Generate formula
+          cat > formula.rb <<FORMULA
+          # typed: false
+          # frozen_string_literal: true
+
+          class HttpProxyLogger < Formula
+            desc "HTTP reverse-proxy with colored request/response logging"
+            homepage "https://github.com/stn1slv/http-proxy-logger"
+            version "${VERSION}"
+            license "MIT"
+
+            if Hardware::CPU.intel?
+              url "https://github.com/stn1slv/http-proxy-logger/releases/download/${TAG}/http-proxy-logger_darwin_amd64.tar.gz"
+              sha256 "${SHA_AMD64}"
+            end
+            if Hardware::CPU.arm?
+              url "https://github.com/stn1slv/http-proxy-logger/releases/download/${TAG}/http-proxy-logger_darwin_arm64.tar.gz"
+              sha256 "${SHA_ARM64}"
+            end
+
+            def install
+              bin.install "http-proxy-logger"
+            end
+
+            test do
+              assert_match "Usage", shell_output("#{bin}/http-proxy-logger -help 2>&1", 2)
+            end
+          end
+          FORMULA
+
+          # Push to homebrew-tap via GitHub API
+          FORMULA_CONTENT=$(base64 -w 0 formula.rb)
+
+          # Check if file already exists to get its SHA
+          EXISTING=$(curl -fsSL \
+            -H "Authorization: token ${HOMEBREW_TAP_TOKEN}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/stn1slv/homebrew-tap/contents/Formula/http-proxy-logger.rb" 2>/dev/null || echo "")
+
+          FILE_SHA=$(echo "$EXISTING" | grep -o '"sha":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+          # Build request body
+          if [ -n "$FILE_SHA" ]; then
+            BODY="{\"message\":\"chore: update http-proxy-logger to ${VERSION}\",\"content\":\"${FORMULA_CONTENT}\",\"sha\":\"${FILE_SHA}\"}"
+          else
+            BODY="{\"message\":\"feat: add http-proxy-logger ${VERSION}\",\"content\":\"${FORMULA_CONTENT}\"}"
+          fi
+
+          curl -fsSL -X PUT \
+            -H "Authorization: token ${HOMEBREW_TAP_TOKEN}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/stn1slv/homebrew-tap/contents/Formula/http-proxy-logger.rb" \
+            -d "$BODY"
