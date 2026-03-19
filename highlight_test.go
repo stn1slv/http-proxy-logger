@@ -123,7 +123,7 @@ func TestColoredTimeWithColorsEnabled(t *testing.T) {
 	*noColor = false
 
 	testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
-	result := coloredTime(testTime)
+	result := coloredTime(testTime, colorTime)
 
 	if !strings.Contains(result, colorTime) {
 		t.Errorf("coloredTime with colors enabled should contain color codes: %q", result)
@@ -144,7 +144,7 @@ func TestColoredTimeWithColorsDisabled(t *testing.T) {
 	*noColor = true
 
 	testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
-	result := coloredTime(testTime)
+	result := coloredTime(testTime, colorTime)
 	expected := "[2023/01/01 12:00:00]"
 
 	if result != expected {
@@ -155,7 +155,7 @@ func TestColoredTimeWithColorsDisabled(t *testing.T) {
 	}
 }
 
-func TestColoredTimeWithColorWithColorsEnabled(t *testing.T) {
+func TestColoredTimeWithCustomColor(t *testing.T) {
 	// Save original state
 	originalNoColor := noColor
 	if noColor == nil {
@@ -166,34 +166,12 @@ func TestColoredTimeWithColorWithColorsEnabled(t *testing.T) {
 	*noColor = false
 
 	testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
-	result := coloredTimeWithColor(testTime, colorReqMarker)
+	result := coloredTime(testTime, colorReqMarker)
 
 	if !strings.Contains(result, colorReqMarker) {
-		t.Errorf("coloredTimeWithColor with colors enabled should contain color codes: %q", result)
+		t.Errorf("coloredTime with custom color should contain color codes: %q", result)
 	}
 	if !strings.Contains(result, "[2023/01/01 12:00:00]") {
-		t.Errorf("coloredTimeWithColor should contain formatted time: %q", result)
-	}
-}
-
-func TestColoredTimeWithColorWithColorsDisabled(t *testing.T) {
-	// Save original state
-	originalNoColor := noColor
-	if noColor == nil {
-		noColor = flag.Bool("no-color", false, "disable colored output")
-	}
-	defer func() { noColor = originalNoColor }()
-
-	*noColor = true
-
-	testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
-	result := coloredTimeWithColor(testTime, colorReqMarker)
-	expected := "[2023/01/01 12:00:00]"
-
-	if result != expected {
-		t.Errorf("coloredTimeWithColor with colors disabled: got %q, want %q", result, expected)
-	}
-	if strings.Contains(result, colorReqMarker) {
-		t.Errorf("coloredTimeWithColor with colors disabled should not contain color codes: %q", result)
+		t.Errorf("coloredTime should contain formatted time: %q", result)
 	}
 }

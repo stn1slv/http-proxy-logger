@@ -5,13 +5,13 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -24,7 +24,7 @@ import (
 const maxLogBodySize = 1 << 20 // 1 MB
 
 // reqCounter is a global atomic counter for request/response pairs.
-var reqCounter int32
+var reqCounter atomic.Int64
 
 // Command-line flags for controlling logging and proxy configuration.
 var logRequests = flag.Bool("requests", true, "log HTTP requests")
@@ -62,18 +62,10 @@ func decodeBody(encoding string, body []byte) ([]byte, error) {
 	}
 }
 
-// coloredTimeWithColor returns the formatted time string wrapped in the given color.
-func coloredTimeWithColor(t time.Time, color string) string {
-	if *noColor {
-		return "[" + t.Format("2006/01/02 15:04:05") + "]"
-	}
-	return wrapColor("["+t.Format("2006/01/02 15:04:05")+"]", color)
-}
-
 // RoundTrip implements the http.RoundTripper interface.
 // It logs the outgoing request and incoming response with highlighted output.
 func (DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	counter := atomic.AddInt32(&reqCounter, 1)
+	counter := reqCounter.Add(1)
 
 	requestDump, err := httputil.DumpRequestOut(r, true)
 	if err != nil {
@@ -88,11 +80,8 @@ func (DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	headers = append(highlightHeaders(headers, true), []byte("\r\n\r\n")...)
 	if *logRequests {
-		line := colorReqMarker + "--- REQUEST " + strconv.Itoa(int(counter)) + " ---" + colorReset
-		if *noColor {
-			line = "--- REQUEST " + strconv.Itoa(int(counter)) + " ---"
-		}
-		log.Printf("%s %s\n\n%s%s\n\n", coloredTimeWithColor(time.Now(), colorReqMarker), line, string(headers), string(body))
+		line := wrapColor(fmt.Sprintf("--- REQUEST %d ---", counter), colorReqMarker)
+		log.Printf("%s %s\n\n%s%s\n\n", coloredTime(time.Now(), colorReqMarker), line, string(headers), string(body))
 	}
 
 	response, err := http.DefaultTransport.RoundTrip(r)
@@ -113,7 +102,7 @@ func (DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 	var decoded []byte
 	if len(bodyBytes) > maxLogBodySize {
-		decoded = []byte("[body too large to display: " + strconv.Itoa(len(bodyBytes)) + " bytes]")
+		decoded = []byte(fmt.Sprintf("[body too large to display: %d bytes]", len(bodyBytes)))
 	} else {
 		decoded, err = decodeBody(response.Header.Get("Content-Encoding"), bodyBytes)
 		if err != nil {
@@ -125,11 +114,8 @@ func (DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	headerDump = append(highlightHeaders(bytes.TrimSuffix(headerDump, []byte("\r\n\r\n")), false), []byte("\r\n\r\n")...)
 
 	if *logResponses {
-		line := colorResMarker + "--- RESPONSE " + strconv.Itoa(int(counter)) + " (" + response.Status + ") ---" + colorReset
-		if *noColor {
-			line = "--- RESPONSE " + strconv.Itoa(int(counter)) + " (" + response.Status + ") ---"
-		}
-		log.Printf("%s %s\n\n%s%s\n\n", coloredTimeWithColor(time.Now(), colorResMarker), line, string(headerDump), string(decoded))
+		line := wrapColor(fmt.Sprintf("--- RESPONSE %d (%s) ---", counter, response.Status), colorResMarker)
+		log.Printf("%s %s\n\n%s%s\n\n", coloredTime(time.Now(), colorResMarker), line, string(headerDump), string(decoded))
 	}
 	// restore body again for proxying
 	response.Body = io.NopCloser(bytes.NewReader(bodyBytes))
@@ -165,22 +151,23 @@ func getTarget() string {
 // main is the entry point. It sets up the reverse proxy and starts the HTTP server.
 func main() {
 	flag.Parse()
+	// Respect NO_COLOR env var convention (https://no-color.org/)
+	if _, ok := os.LookupEnv("NO_COLOR"); ok {
+		*noColor = true
+	}
 	log.SetFlags(0)
 	target, err := url.Parse(getTarget())
 	if err != nil || target.Scheme == "" || target.Host == "" {
 		log.Fatalf("invalid target URL: %s", getTarget())
 	}
-	log.Printf("%s %s -> %s\n", coloredTime(time.Now()), getListenAddress(), target)
+	log.Printf("%s %s -> %s\n", coloredTime(time.Now(), colorTime), getListenAddress(), target)
 
-	proxy := httputil.NewSingleHostReverseProxy(target)
-
-	proxy.Transport = DebugTransport{}
-
-	d := proxy.Director
-	proxy.Director = func(r *http.Request) {
-		d(r) // call default director
-
-		r.Host = target.Host // set Host header as expected by target
+	proxy := &httputil.ReverseProxy{
+		Transport: DebugTransport{},
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(target)
+			pr.Out.Host = target.Host
+		},
 	}
 
 	srv := &http.Server{

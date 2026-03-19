@@ -43,11 +43,8 @@ func wrapColor(s, color string) string {
 	return color + s + colorReset
 }
 
-func coloredTime(t time.Time) string {
-	if *noColor {
-		return "[" + t.Format("2006/01/02 15:04:05") + "]"
-	}
-	return wrapColor("["+t.Format("2006/01/02 15:04:05")+"]", colorTime)
+func coloredTime(t time.Time, color string) string {
+	return wrapColor("["+t.Format("2006/01/02 15:04:05")+"]", color)
 }
 
 func highlightJSONValue(v interface{}, indent int) string {
@@ -248,7 +245,7 @@ func highlightXML(data []byte) string {
 			justWroteInlineText = false
 
 		case xml.CharData:
-			txt := strings.TrimSpace(string([]byte(tok)))
+			txt := strings.TrimSpace(string(tok))
 			if len(txt) > 0 {
 				if justWroteStartTag {
 					// Keep text on same line as opening tag
