@@ -42,20 +42,41 @@ X-Cloud-Trace-Context: 83ac5937ae7ba8f3ef96ee941227b1b0
 }
 ```
 
-## Building
+## Installation
 
-The project requires **Go 1.23**.
+### Homebrew (macOS)
 
-### Build a binary
+```bash
+brew install stn1slv/tap/http-proxy-logger
+```
+
+### Download binary (Linux / Windows / macOS)
+
+Pre-built binaries for all platforms are available on the
+[Releases](https://github.com/stn1slv/http-proxy-logger/releases/latest) page.
+
+Download the binary for your OS/architecture, make it executable, and move it
+to a directory in your `PATH`:
+
+```bash
+# Example for Linux amd64
+curl -fsSL https://github.com/stn1slv/http-proxy-logger/releases/latest/download/http-proxy-logger-linux-amd64 -o http-proxy-logger
+chmod +x http-proxy-logger
+sudo mv http-proxy-logger /usr/local/bin/
+```
+
+### Docker
+
+```bash
+docker pull stn1slv/http-proxy-logger
+```
+
+### From source
+
+Requires **Go 1.26+**.
 
 ```bash
 go build -o http-proxy-logger
-```
-
-### Build a Docker image
-
-```bash
-docker build -t stn1slv/http-proxy-logger .
 ```
 
 ## Running
