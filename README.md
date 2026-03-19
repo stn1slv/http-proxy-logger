@@ -42,17 +42,23 @@ X-Cloud-Trace-Context: 83ac5937ae7ba8f3ef96ee941227b1b0
 }
 ```
 
-## Building
+## Installation
 
-The project requires **Go 1.23**.
+### Homebrew (macOS)
 
-### Build a binary
+```bash
+brew install stn1slv/tap/http-proxy-logger
+```
+
+### From source
+
+The project requires **Go 1.26+**.
 
 ```bash
 go build -o http-proxy-logger
 ```
 
-### Build a Docker image
+### Docker image
 
 ```bash
 docker build -t stn1slv/http-proxy-logger .
