@@ -1,0 +1,44 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - revive
+    - gocritic
+    - gosec
+    - errorlint
+    - prealloc
+    - unparam
+    - nilerr
+    - forcetypeassert
+    - makezero
+    - goconst
+    - misspell
+  settings:
+    revive:
+      rules:
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: if-return
+        - name: var-naming
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+    gosec:
+      excludes:
+        - G706 # Log injection — expected for a debugging proxy that logs HTTP traffic
+  exclusions:
+    rules:
+      - path: '(.+)_test\.go'
+        linters:
+          - gosec

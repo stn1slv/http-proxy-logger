@@ -19,6 +19,10 @@ import (
 	"github.com/andybalholm/brotli"
 )
 
+// maxLogBodySize is the maximum response body size (in bytes) that will be logged with highlighting.
+// Bodies exceeding this limit are replaced with a truncation notice to prevent excessive memory usage.
+const maxLogBodySize = 1 << 20 // 1 MB
+
 // reqCounter is a global atomic counter for request/response pairs.
 var reqCounter int32
 
@@ -41,14 +45,14 @@ func decodeBody(encoding string, body []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		defer r.Close()
+		defer func() { _ = r.Close() }()
 		return io.ReadAll(r)
 	case "deflate":
 		r, err := zlib.NewReader(bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
-		defer r.Close()
+		defer func() { _ = r.Close() }()
 		return io.ReadAll(r)
 	case "br":
 		r := brotli.NewReader(bytes.NewReader(body))
@@ -100,18 +104,23 @@ func (DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	// restore body for client
-	response.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	response.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 	headerDump, err := httputil.DumpResponse(response, false)
 	if err != nil {
 		return nil, err
 	}
 
-	decoded, err := decodeBody(response.Header.Get("Content-Encoding"), bodyBytes)
-	if err != nil {
-		decoded = bodyBytes
+	var decoded []byte
+	if len(bodyBytes) > maxLogBodySize {
+		decoded = []byte("[body too large to display: " + strconv.Itoa(len(bodyBytes)) + " bytes]")
+	} else {
+		decoded, err = decodeBody(response.Header.Get("Content-Encoding"), bodyBytes)
+		if err != nil {
+			decoded = bodyBytes
+		}
+		decoded = highlightBody(decoded, response.Header.Get("Content-Type"))
 	}
-	decoded = highlightBody(decoded, response.Header.Get("Content-Type"))
 
 	headerDump = append(highlightHeaders(bytes.TrimSuffix(headerDump, []byte("\r\n\r\n")), false), []byte("\r\n\r\n")...)
 
@@ -123,7 +132,7 @@ func (DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		log.Printf("%s %s\n\n%s%s\n\n", coloredTimeWithColor(time.Now(), colorResMarker), line, string(headerDump), string(decoded))
 	}
 	// restore body again for proxying
-	response.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	response.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	return response, nil
 }
 
@@ -157,7 +166,10 @@ func getTarget() string {
 func main() {
 	flag.Parse()
 	log.SetFlags(0)
-	target, _ := url.Parse(getTarget())
+	target, err := url.Parse(getTarget())
+	if err != nil || target.Scheme == "" || target.Host == "" {
+		log.Fatalf("invalid target URL: %s", getTarget())
+	}
 	log.Printf("%s %s -> %s\n", coloredTime(time.Now()), getListenAddress(), target)
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
@@ -171,7 +183,14 @@ func main() {
 		r.Host = target.Host // set Host header as expected by target
 	}
 
-	if err := http.ListenAndServe(getListenAddress(), proxy); err != nil {
-		panic(err)
+	srv := &http.Server{
+		Addr:         getListenAddress(),
+		Handler:      proxy,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+	if err := srv.ListenAndServe(); err != nil {
+		log.Fatal(err)
 	}
 }

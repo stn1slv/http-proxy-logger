@@ -1,8 +1,11 @@
-FROM golang:1.23-alpine as app-builder
-WORKDIR /go/src/app
+FROM golang:1.23-alpine AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
 COPY . .
-RUN go build -o app
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /app
 
-FROM alpine
-COPY --from=app-builder /go/src/app/app /app
+FROM gcr.io/distroless/static
+COPY --from=builder /app /app
+USER nonroot
 ENTRYPOINT ["/app"]
