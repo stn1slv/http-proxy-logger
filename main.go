@@ -19,8 +19,9 @@ import (
 	"github.com/andybalholm/brotli"
 )
 
-// maxLogBodySize is the maximum response body size (in bytes) that will be logged with highlighting.
-// Bodies exceeding this limit are replaced with a truncation notice to prevent excessive memory usage.
+// maxLogBodySize is the maximum response body size (in bytes) that will be highlighted in log output.
+// Bodies exceeding this limit are replaced with a truncation notice to avoid expensive formatting.
+// Note: the full response body is still buffered in memory for proxying regardless of this limit.
 const maxLogBodySize = 1 << 20 // 1 MB
 
 // reqCounter is a global atomic counter for request/response pairs.
@@ -156,9 +157,13 @@ func main() {
 		*noColor = true
 	}
 	log.SetFlags(0)
-	target, err := url.Parse(getTarget())
-	if err != nil || target.Scheme == "" || target.Host == "" {
-		log.Fatalf("invalid target URL: %s", getTarget())
+	rawTarget := getTarget()
+	target, err := url.Parse(rawTarget)
+	if err != nil {
+		log.Fatalf("invalid target URL %q: %v", rawTarget, err)
+	}
+	if target.Scheme == "" || target.Host == "" {
+		log.Fatalf("invalid target URL %q: scheme and host are required", rawTarget)
 	}
 	log.Printf("%s %s -> %s\n", coloredTime(time.Now(), colorTime), getListenAddress(), target)
 

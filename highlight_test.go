@@ -56,6 +56,9 @@ func TestHighlightHeadersWithColorsDisabled(t *testing.T) {
 // Tests for status code coloring
 
 func TestColorStatus(t *testing.T) {
+	if colorStatus(101) != colorTime {
+		t.Errorf("expected 1xx color")
+	}
 	if colorStatus(201) != colorStatus2xx {
 		t.Errorf("expected 2xx color")
 	}

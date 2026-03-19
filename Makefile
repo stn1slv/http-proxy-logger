@@ -5,6 +5,7 @@ APP_NAME := http-proxy-logger
 setup:
 	go mod download
 	@echo "Install golangci-lint: https://golangci-lint.run/welcome/install/"
+	@echo "Install gofumpt:       go install mvdan.cc/gofumpt@latest"
 
 test:
 	go test -race -v ./...
