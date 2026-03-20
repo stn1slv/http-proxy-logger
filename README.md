@@ -9,7 +9,6 @@ header names, and JSON or XML bodies are highlighted for readability.
 ## Example output
 
 ![Example output](.img/example.png)
-```
 
 ## Installation
 
