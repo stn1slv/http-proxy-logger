@@ -1,6 +1,6 @@
 APP_NAME := http-proxy-logger
 
-.PHONY: setup test lint format build run
+.PHONY: setup test lint format build run clean upgrade-deps docker-build
 
 setup:
 	go mod download
@@ -21,3 +21,13 @@ build:
 
 run: build
 	./$(APP_NAME)
+
+clean:
+	rm -f $(APP_NAME) coverage.out
+
+upgrade-deps:
+	go get -u ./...
+	go mod tidy
+
+docker-build:
+	docker build -t stn1slv/http-proxy-logger .
