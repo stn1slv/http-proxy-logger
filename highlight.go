@@ -14,6 +14,27 @@ import (
 
 const xmlnsPrefix = "xmlns"
 
+// maxIndentDepth bounds how far JSON and XML output is indented.
+//
+// Both highlighters write one indent string per token, so without a cap the
+// output grows with the square of the nesting depth: 112 KB of <a><a>... expands
+// to roughly 500 MB, and a body at the 1 MB log limit reaches tens of gigabytes.
+// Deeper levels simply stop indenting further; nothing is dropped.
+const maxIndentDepth = 32
+
+// indentFor returns the indentation for a nesting depth, bounded by
+// maxIndentDepth. A negative depth (which malformed input could otherwise
+// produce) yields no indentation rather than panicking in strings.Repeat.
+func indentFor(depth int) string {
+	if depth > maxIndentDepth {
+		depth = maxIndentDepth
+	}
+	if depth < 0 {
+		depth = 0
+	}
+	return strings.Repeat("  ", depth)
+}
+
 const (
 	colorReset     = "\033[0m"
 	colorKey       = "\033[36m"
@@ -37,7 +58,7 @@ const (
 )
 
 func wrapColor(s, color string) string {
-	if *noColor {
+	if noColor {
 		return s
 	}
 	return color + s + colorReset
@@ -59,7 +80,7 @@ func highlightJSONValue(v interface{}, indent int) string {
 		b.WriteString(wrapColor("{", colorPunct) + "\n")
 		indent++
 		for i, k := range keys {
-			b.WriteString(strings.Repeat("  ", indent))
+			b.WriteString(indentFor(indent))
 			b.WriteString(wrapColor("\""+k+"\"", colorKey))
 			b.WriteString(wrapColor(": ", colorPunct))
 			b.WriteString(highlightJSONValue(t[k], indent))
@@ -69,7 +90,7 @@ func highlightJSONValue(v interface{}, indent int) string {
 			b.WriteString("\n")
 		}
 		indent--
-		b.WriteString(strings.Repeat("  ", indent))
+		b.WriteString(indentFor(indent))
 		b.WriteString(wrapColor("}", colorPunct))
 		return b.String()
 	case []interface{}:
@@ -77,7 +98,7 @@ func highlightJSONValue(v interface{}, indent int) string {
 		b.WriteString(wrapColor("[", colorPunct) + "\n")
 		indent++
 		for i, val := range t {
-			b.WriteString(strings.Repeat("  ", indent))
+			b.WriteString(indentFor(indent))
 			b.WriteString(highlightJSONValue(val, indent))
 			if i < len(t)-1 {
 				b.WriteString(wrapColor(",", colorPunct))
@@ -85,7 +106,7 @@ func highlightJSONValue(v interface{}, indent int) string {
 			b.WriteString("\n")
 		}
 		indent--
-		b.WriteString(strings.Repeat("  ", indent))
+		b.WriteString(indentFor(indent))
 		b.WriteString(wrapColor("]", colorPunct))
 		return b.String()
 	case string:
@@ -189,7 +210,7 @@ func highlightXML(data []byte) string {
 			}
 
 			if !justWroteStartTag {
-				b.WriteString(strings.Repeat("  ", indent))
+				b.WriteString(indentFor(indent))
 			}
 			b.WriteString(wrapColor("<"+elementName, colorTag))
 
@@ -237,7 +258,7 @@ func highlightXML(data []byte) string {
 				}
 			}
 			if !justWroteStartTag && !justWroteInlineText {
-				b.WriteString(strings.Repeat("  ", indent))
+				b.WriteString(indentFor(indent))
 			}
 			b.WriteString(wrapColor("</"+elementName+">", colorTag))
 			b.WriteString("\n")
@@ -255,7 +276,7 @@ func highlightXML(data []byte) string {
 					justWroteInlineText = true
 				} else {
 					// Multi-line or separate text content
-					b.WriteString(strings.Repeat("  ", indent))
+					b.WriteString(indentFor(indent))
 					b.WriteString(wrapColor(txt, colorString))
 					b.WriteString("\n")
 					justWroteStartTag = false
@@ -266,7 +287,7 @@ func highlightXML(data []byte) string {
 
 		case xml.Comment:
 			if !justWroteStartTag {
-				b.WriteString(strings.Repeat("  ", indent))
+				b.WriteString(indentFor(indent))
 			}
 			b.WriteString(wrapColor("<!--"+string(tok)+"-->", colorNull))
 			b.WriteString("\n")
