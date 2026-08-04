@@ -745,6 +745,25 @@ func TestFormatBodyForLog(t *testing.T) {
 	}
 }
 
+func TestFormatBodyForLogPutsNoticeBeforeBody(t *testing.T) {
+	// An undecodable body is still shown, but the explanation has to come
+	// first: the raw bytes may be long or binary and would otherwise push the
+	// notice out of view.
+	setNoColor(t, true)
+
+	body := []byte("this is not gzip at all")
+	got := string(formatBodyForLog(body, int64(len(body)), encodingGzip, "text/plain"))
+
+	notice := strings.Index(got, "[decode failed:")
+	payload := strings.Index(got, string(body))
+	if notice < 0 || payload < 0 {
+		t.Fatalf("expected both the notice and the raw body, got %q", got)
+	}
+	if notice > payload {
+		t.Errorf("notice must precede the body, got %q", got)
+	}
+}
+
 func TestRoundTripPreservesLargeRequestBody(t *testing.T) {
 	// The request body is captured for logging only up to maxLogBodySize, so
 	// the captured prefix must be spliced back in front of the remainder.

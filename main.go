@@ -187,11 +187,11 @@ func decodeForLog(body []byte, contentEncoding string) (out []byte, decompressed
 		return body, false, ""
 	}
 	if unsupported := unsupportedEncodings(contentEncoding); len(unsupported) > 0 {
-		return body, false, fmt.Sprintf("\n[not decoded: unsupported content-encoding %q]", strings.Join(unsupported, ", "))
+		return body, false, fmt.Sprintf("[not decoded: unsupported content-encoding %q]", strings.Join(unsupported, ", "))
 	}
 	decoded, err := decodeBody(contentEncoding, body)
 	if err != nil {
-		return body, false, fmt.Sprintf("\n[decode failed: %v]", err)
+		return body, false, fmt.Sprintf("[decode failed: %v]", err)
 	}
 	return decoded, true, ""
 }
@@ -203,17 +203,25 @@ func decodeForLog(body []byte, contentEncoding string) (out []byte, decompressed
 func formatBodyForLog(body []byte, wireSize int64, contentEncoding, contentType string) []byte {
 	decoded, decompressed, notice := decodeForLog(body, contentEncoding)
 
+	// The notice goes first. A body that could not be decoded is still shown
+	// as-is, because seeing what actually arrived is the point of a debugging
+	// proxy, but the raw bytes may be long or binary and would otherwise push
+	// the explanation out of view before it can be read.
+	if notice != "" {
+		notice += "\n"
+	}
+
 	if len(decoded) > maxLogBodySize {
 		switch {
 		case decompressed:
-			return fmt.Appendf(nil, "[decompressed body exceeds the %d byte log limit]%s", maxLogBodySize, notice)
+			return fmt.Appendf(nil, "%s[decompressed body exceeds the %d byte log limit]", notice, maxLogBodySize)
 		case wireSize >= 0:
-			return fmt.Appendf(nil, "[body too large to display: %d bytes]%s", wireSize, notice)
+			return fmt.Appendf(nil, "%s[body too large to display: %d bytes]", notice, wireSize)
 		default:
-			return fmt.Appendf(nil, "[body too large to display: over %d bytes]%s", maxLogBodySize, notice)
+			return fmt.Appendf(nil, "%s[body too large to display: over %d bytes]", notice, maxLogBodySize)
 		}
 	}
-	return append(highlightBody(decoded, contentType), notice...)
+	return append([]byte(notice), highlightBody(decoded, contentType)...)
 }
 
 // isEventStream reports whether the response is a server-sent event stream,
