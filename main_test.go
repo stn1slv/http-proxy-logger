@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -514,15 +515,16 @@ func (f fakeTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	return f.response, nil
 }
 
-// recordingConn is a response body that reports whether it was read. It
-// implements io.ReadWriteCloser so it can stand in for a hijacked connection.
+// recordingConn is a response body that records how it was used. It implements
+// io.ReadWriteCloser so it can stand in for a hijacked connection.
 type recordingConn struct {
 	readCalled bool
+	closeCount int
 }
 
 func (c *recordingConn) Read([]byte) (int, error)    { c.readCalled = true; return 0, io.EOF }
 func (c *recordingConn) Write(p []byte) (int, error) { return len(p), nil }
-func (c *recordingConn) Close() error                { return nil }
+func (c *recordingConn) Close() error                { c.closeCount++; return nil }
 
 // roundTripCanned runs a canned response through DebugTransport.
 func roundTripCanned(t *testing.T, response *http.Response) (*http.Response, error) {
@@ -613,6 +615,42 @@ func TestRoundTripSkipsBodyWhenResponseLoggingDisabled(t *testing.T) {
 	}
 	if got.Body != conn {
 		t.Error("body was replaced even though response logging is disabled")
+	}
+	// The caller still owns the body here, so RoundTrip must not have closed it.
+	if conn.closeCount != 0 {
+		t.Errorf("body closed %d times; it is being handed back to the caller", conn.closeCount)
+	}
+}
+
+func TestRoundTripClosesUpstreamBody(t *testing.T) {
+	// Buffering the body for logging leaves the upstream body owned by
+	// RoundTrip, which must close it exactly once so the connection is released.
+	setNoColor(t, true)
+	setBool(t, &logRequests, false)
+	setBool(t, &logResponses, true)
+	captureLog(t)
+
+	conn := &recordingConn{}
+	got, err := roundTripCanned(t, &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Proto:      "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
+		Header: http.Header{"Content-Type": {"application/json"}},
+		Body:   conn,
+	})
+	if err != nil {
+		t.Fatalf("RoundTrip failed: %v", err)
+	}
+	if conn.closeCount != 1 {
+		t.Errorf("upstream body closed %d times, want exactly 1", conn.closeCount)
+	}
+	// The client must still get a usable body, and closing it must not reach
+	// the upstream body a second time.
+	if err := got.Body.Close(); err != nil {
+		t.Errorf("closing the returned body failed: %v", err)
+	}
+	if conn.closeCount != 1 {
+		t.Errorf("upstream body closed %d times after the client closed its own", conn.closeCount)
 	}
 }
 
@@ -826,7 +864,13 @@ func TestResolveNoColor(t *testing.T) {
 			} else {
 				_ = os.Unsetenv("NO_COLOR")
 			}
+			// registerFlags writes every default straight into its target, so
+			// all five must be guarded, not just the one under test.
 			setNoColor(t, false)
+			setBool(t, &logRequests, logRequests)
+			setBool(t, &logResponses, logResponses)
+			setString(t, &cliTarget, cliTarget)
+			setString(t, &cliPort, cliPort)
 
 			fs := flag.NewFlagSet("test", flag.ContinueOnError)
 			registerFlags(fs)
@@ -874,6 +918,122 @@ func TestValidateListenPort(t *testing.T) {
 			}
 			if !tt.wantErr && err != nil {
 				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestDumpRequestHeadersDoesNotMaterializeDeclaredBody(t *testing.T) {
+	// httputil.DumpRequestOut writes a dummy body of ContentLength bytes into
+	// its buffer before slicing it off, so dumping the request directly would
+	// let a client allocate gigabytes by declaring a Content-Length it never
+	// sends. The dump must stay proportional to the headers.
+	const declared = 1 << 30 // 1 GiB
+
+	req, err := http.NewRequest(http.MethodPost, "http://example.invalid/upload", strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	req.ContentLength = declared
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	dump, err := dumpRequestHeaders(req)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatalf("dumpRequestHeaders failed: %v", err)
+	}
+
+	if len(dump) > 4096 {
+		t.Errorf("header dump is %d bytes; the declared body must not be materialized", len(dump))
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 1<<20 {
+		t.Errorf("dumping allocated %d bytes for a %d byte declared body", allocated, declared)
+	}
+	// The real length must still be reported, not the empty copy's.
+	if want := fmt.Sprintf("Content-Length: %d\r\n", declared); !strings.Contains(string(dump), want) {
+		t.Errorf("dump does not report the real length %q, got:\n%s", want, dump)
+	}
+}
+
+func TestDumpRequestHeadersReportsFraming(t *testing.T) {
+	tests := []struct {
+		name          string
+		contentLength int64
+		body          string
+		want          string
+		notWant       string
+	}{
+		{name: "known length", contentLength: 15, body: "0123456789abcde", want: "Content-Length: 15\r\n"},
+		{name: "no body", contentLength: 0, body: "", notWant: "Content-Length: 1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, "http://example.invalid/", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.ContentLength = tt.contentLength
+
+			dump, err := dumpRequestHeaders(req)
+			if err != nil {
+				t.Fatalf("dumpRequestHeaders failed: %v", err)
+			}
+			got := string(dump)
+			if tt.want != "" && !strings.Contains(got, tt.want) {
+				t.Errorf("dump missing %q, got:\n%s", tt.want, got)
+			}
+			if tt.notWant != "" && strings.Contains(got, tt.notWant) {
+				t.Errorf("dump unexpectedly contains %q, got:\n%s", tt.notWant, got)
+			}
+			// The request body must be left intact for the transport to send.
+			sent, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(sent) != tt.body {
+				t.Errorf("request body was consumed: got %q, want %q", sent, tt.body)
+			}
+		})
+	}
+}
+
+func TestHighlightersBoundIndentation(t *testing.T) {
+	// Indentation is written per token, so an uncapped indent makes output
+	// quadratic in nesting depth: a deeply nested body at the log limit would
+	// expand to tens of gigabytes.
+	setNoColor(t, true)
+
+	tests := []struct {
+		name        string
+		body        string
+		contentType string
+	}{
+		{
+			name:        "xml",
+			body:        strings.Repeat("<a>", 16000) + strings.Repeat("</a>", 16000),
+			contentType: "application/xml",
+		},
+		{
+			name:        "json",
+			body:        strings.Repeat("[", 5000) + strings.Repeat("]", 5000),
+			contentType: "application/json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := []byte(tt.body)
+			out := highlightBody(in, tt.contentType)
+			// With the cap, output stays linear in input: every token gains at
+			// most maxIndentDepth*2 spaces plus a newline.
+			limit := len(in) * (2*maxIndentDepth + 8)
+			if len(out) > limit {
+				t.Errorf("highlighting %d bytes produced %d bytes (limit %d): indentation is not bounded",
+					len(in), len(out), limit)
 			}
 		})
 	}

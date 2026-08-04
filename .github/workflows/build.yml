@@ -30,7 +30,7 @@ jobs:
 
     - name: Check formatting
       run: |
-        go install mvdan.cc/gofumpt@latest
+        go install mvdan.cc/gofumpt@v0.11.0
         test -z "$(gofumpt -extra -l .)" || { gofumpt -extra -d .; exit 1; }
 
     - name: Test

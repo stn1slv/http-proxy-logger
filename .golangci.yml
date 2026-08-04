@@ -44,11 +44,14 @@ linters:
           - gosec
           - goconst # repeated literals in table-driven test cases are intentional
           - unparam # test doubles have signatures fixed by the interface they implement
-      # Parsing untrusted XML is the point of the highlighter. encoding/xml never
-      # resolves external entities and ignores DTDs, and the input is already
-      # capped at maxLogBodySize before it reaches the decoder. Matched by text
-      # rather than listed under gosec.excludes, because G709 is newer than the
-      # golangci-lint version pinned in CI and would fail `config verify` there.
+      # Parsing untrusted XML is the point of the highlighter, and encoding/xml
+      # never resolves external entities or expands DTDs, so there is no XXE or
+      # entity-expansion exposure. Output size is bounded by maxIndentDepth in
+      # highlight.go; the input size cap alone is not sufficient, because
+      # indentation is written per token and would otherwise be quadratic in
+      # nesting depth. Matched by text rather than listed under gosec.excludes,
+      # because G709 is newer than the golangci-lint version pinned in CI and
+      # would fail `config verify` there.
       - path: highlight\.go
         linters:
           - gosec

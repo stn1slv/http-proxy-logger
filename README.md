@@ -113,11 +113,22 @@ using the format shown above.
   (WebSocket, `101 Switching Protocols`), `text/event-stream` responses, and any
   response when `-responses=false` is set are streamed straight through instead,
   but every other response is held in memory until it has been fully received.
+- **Request bodies are buffered too**, up to the 1 MB log limit, and the upstream
+  request is not sent until that much has arrived. Streaming or interactive
+  uploads are therefore delayed. Run with `-requests=false` to skip the capture
+  and let request bodies pass straight through.
+- **There is no deadline on reading a request body.** `ReadHeaderTimeout` bounds
+  the headers, but a client that trickles a body can hold a connection open
+  indefinitely. This is an accepted trade-off: any read deadline would truncate
+  legitimately slow or large uploads. Do not expose this proxy to untrusted
+  networks.
 - **The highlighters are lossy.** They are meant for reading, not for byte-exact
   reproduction: XML `<!DOCTYPE>` declarations are dropped, surrounding whitespace
   in text nodes is trimmed, CDATA sections are unwrapped, and JSON object keys are
-  sorted, duplicates collapsed, and integers beyond 2^53 lose precision. The body
-  forwarded to the client is never affected.
+  sorted, duplicates collapsed, and integers beyond 2^53 lose precision. Output is
+  indented to at most 32 levels, because indentation is written per token and
+  would otherwise grow with the square of the nesting depth. The body forwarded to
+  the client is never affected.
 - **This is a reverse proxy**, not a forward proxy: there is no `CONNECT` support
   and no TLS listener, and `Location` headers in redirects are passed through
   unrewritten.

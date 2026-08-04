@@ -183,7 +183,10 @@ func decodeBody(encoding string, body []byte) ([]byte, error) {
 // decodeForLog decompresses body for display. It returns the bytes to show,
 // whether decompression was applied, and a notice explaining any problem.
 func decodeForLog(body []byte, contentEncoding string) (out []byte, decompressed bool, notice string) {
-	if len(splitEncodings(contentEncoding)) == 0 {
+	// An empty body is not a decode failure. 204, 304 and HEAD responses often
+	// keep their Content-Encoding header, and every decoder reports EOF on zero
+	// bytes, which would otherwise log a spurious error for each one.
+	if len(body) == 0 || len(splitEncodings(contentEncoding)) == 0 {
 		return body, false, ""
 	}
 	if unsupported := unsupportedEncodings(contentEncoding); len(unsupported) > 0 {
@@ -232,6 +235,12 @@ func isEventStream(response *http.Response) bool {
 
 // captureRequestBody reads the start of the request body for logging and splices
 // it back in front of the remainder, so the upstream still receives every byte.
+//
+// This runs before the request is forwarded, so the upstream call waits until
+// the first maxLogBodySize bytes have arrived. The server sets no read deadline
+// on bodies (see main), which means a client trickling an upload holds a
+// connection for as long as it likes. Run with -requests=false to skip the
+// capture entirely and let bodies stream straight through.
 func captureRequestBody(r *http.Request) []byte {
 	if r.Body == nil || r.Body == http.NoBody {
 		return nil
@@ -245,14 +254,59 @@ func captureRequestBody(r *http.Request) []byte {
 	return formatBodyForLog(head, r.ContentLength, r.Header.Get("Content-Encoding"), r.Header.Get("Content-Type"))
 }
 
+// dumpRequestHeaders renders the outbound request line and headers, including
+// the ones http.Transport adds.
+//
+// The dump is taken from a copy of the request carrying no body. That is not an
+// optimization: httputil.DumpRequestOut writes a dummy body of ContentLength
+// bytes into its buffer and only then slices it off (see the TODO in
+// net/http/httputil/dump.go), so dumping the request itself would let a client
+// allocate gigabytes merely by declaring a Content-Length it never sends. The
+// real length is restored afterwards.
+func dumpRequestHeaders(r *http.Request) ([]byte, error) {
+	headless := *r
+	headless.Body = http.NoBody
+	headless.ContentLength = 0
+
+	dump, err := httputil.DumpRequestOut(&headless, false)
+	if err != nil {
+		return nil, err
+	}
+	// Stop at the end of the headers. With an empty body the writer can still
+	// emit chunked framing after them, which is not part of the header view.
+	if i := bytes.Index(dump, []byte("\r\n\r\n")); i >= 0 {
+		dump = dump[:i+4]
+	}
+	return restoreContentLength(dump, r.ContentLength), nil
+}
+
+// restoreContentLength puts the real Content-Length back into a dump taken from
+// a copy with no body. A chunked request needs no fixup: the copy keeps the
+// original TransferEncoding, so the dump already reports it.
+func restoreContentLength(dump []byte, contentLength int64) []byte {
+	if contentLength <= 0 {
+		return dump
+	}
+	line := fmt.Sprintf("Content-Length: %d", contentLength)
+	s := string(dump)
+	// DumpRequestOut emits "Content-Length: 0" for methods that always send one,
+	// because the copy it saw had no body.
+	if strings.Contains(s, "\r\nContent-Length: 0\r\n") {
+		return []byte(strings.Replace(s, "\r\nContent-Length: 0\r\n", "\r\n"+line+"\r\n", 1))
+	}
+	if i := strings.Index(s, "\r\n"); i >= 0 {
+		return []byte(s[:i+2] + line + s[i:])
+	}
+	return dump
+}
+
 // logRequest logs the outgoing request. Dump failures are reported inline rather
 // than returned, so a logging problem never fails the proxied request.
 func logRequest(r *http.Request, counter int64) {
-	// Dump the headers before touching the body: DumpRequestOut with body=false
-	// substitutes a dummy body and restores the original, leaving r.Body intact,
-	// and its output avoids the chunked framing that body=true would include.
+	// Dump the headers before touching the body, so the header view matches what
+	// goes on the wire.
 	var headers []byte
-	if dump, err := httputil.DumpRequestOut(r, false); err != nil {
+	if dump, err := dumpRequestHeaders(r); err != nil {
 		headers = fmt.Appendf(nil, "[failed to dump request headers: %v]\r\n\r\n", err)
 	} else {
 		headers = append(highlightHeaders(bytes.TrimSuffix(dump, []byte("\r\n\r\n")), true), []byte("\r\n\r\n")...)
@@ -421,9 +475,11 @@ func main() {
 	srv := &http.Server{
 		Addr:    addr,
 		Handler: proxy,
-		// No Read/Write deadline: this proxy fronts arbitrary traffic, and a
-		// write deadline would truncate long downloads. ReadHeaderTimeout still
-		// guards against slow-header attacks.
+		// No Read/Write deadline: this proxy fronts arbitrary traffic, and either
+		// deadline would truncate a legitimately long transfer. ReadHeaderTimeout
+		// still guards against slow-header attacks, but nothing bounds how long a
+		// client may take to send a body, so a slow-body client can hold a
+		// connection open. That is an accepted trade-off for a debugging tool.
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
