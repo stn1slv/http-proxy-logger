@@ -34,7 +34,9 @@ Configuration is resolved in the following order: CLI flag → Environment Varia
 | Log Responses| `-responses` | N/A | `true` |
 | Disable Color| `-no-color` | `NO_COLOR` | `false` |
 
-The `NO_COLOR` environment variable follows the [no-color.org](https://no-color.org/) convention — when set (any value), colored output is disabled.
+The `NO_COLOR` environment variable follows the [no-color.org](https://no-color.org/) convention — any non-empty value disables colored output; an empty value is ignored. Because the CLI flag has higher precedence, an explicit `-no-color=false` keeps colors on even when `NO_COLOR` is set (`resolveNoColor` detects explicit flags via `flag.FlagSet.Visit`).
+
+The listen port must parse as a number in `0..65535`; `validateListenPort` rejects anything else (including an empty `PORT`) at startup instead of silently binding a random port.
 
 ## Development Conventions
 
@@ -44,22 +46,27 @@ The `NO_COLOR` environment variable follows the [no-color.org](https://no-color.
 - **Error Handling:** Errors are handled explicitly. `log.Fatal`/`log.Fatalf` is used for critical startup failures.
 - **Formatting:** Code should follow `gofumpt` conventions (stricter superset of `gofmt`).
 - **Linting:** golangci-lint v2 with `.golangci.yml` config (16 linters enabled).
-- **Log Body Limit:** Response bodies exceeding `maxLogBodySize` (1 MB) are replaced with a truncation notice in log output; the full body is still proxied to the client.
+- **Log Body Limit:** `maxLogBodySize` (1 MB) bounds log output only; the full body is always proxied to the client. Decompression is capped at the same limit (`readLimited`), so a compressed payload that expands to gigabytes cannot exhaust memory. `formatBodyForLog` is the single place where a captured body is decoded, truncated and highlighted, and it never returns an error: a logging problem must not break the proxied request.
+- **Configuration State:** The flag-backed settings (`logRequests`, `logResponses`, `cliTarget`, `cliPort`, `noColor`) are plain package-level values bound by `registerFlags` from `main`, not `flag.Bool` pointers. They are written once at startup and only read afterwards.
 
 ### Testing Practices
 - **Framework:** Uses the standard `testing` library. No external assertion libraries are used.
 - **Table-Driven Tests:** Extensively used for body decoding, highlighting, and config helpers.
-- **Test Files:** `main_test.go` (transport, decoding, config), `highlight_test.go` (colors, headers), `json_test.go`, `xml_test.go`.
-- **Isolation:** Tests are not parallelized (`t.Parallel()` is avoided) due to the shared global `noColor` flag state.
-- **Manual Verification:** Some tests manually toggle the `noColor` flag to verify both plain and colored output.
+- **Test Files:** `main_test.go` (transport, decoding, config, helpers), `highlight_test.go` (colors, headers), `json_test.go`, `xml_test.go`.
+- **Isolation:** Tests are not parallelized (`t.Parallel()` is avoided) because the configuration variables are package-level shared state. Any test that changes one **must** use the `setBool` / `setString` / `setNoColor` helpers in `main_test.go`, which restore the previous value via `t.Cleanup`. Restoring by hand is what previously leaked state between tests and made the suite order-dependent.
+- **Shuffling:** `make test` runs `go test -race -shuffle=on`, and so does CI. This is the regression guard for the test-isolation rule above; do not remove it.
+- **Fakes:** `fakeTransport` (injected through `DebugTransport.Transport`) and `recordingConn` allow testing responses that cannot be produced by `httptest`, such as `101 Switching Protocols`. `captureLog` redirects the standard logger so notices can be asserted.
 - **HTTP Testing:** Uses `net/http/httptest` for testing the `DebugTransport` round-trip behavior.
 
 ### Technical Notes
 - **Proxy:** Uses `httputil.ReverseProxy` with the `Rewrite` callback and a custom `Transport` (`DebugTransport`).
-- **Server:** Uses `http.Server` with explicit `ReadTimeout`, `WriteTimeout`, and `IdleTimeout`.
-- **Decompression:** Supports `gzip`, `deflate` (zlib), and `br` (Brotli). Brotli support is provided by `github.com/andybalholm/brotli`.
+- **Server:** Uses `http.Server` with `ReadHeaderTimeout` and `IdleTimeout`. There is deliberately **no** `ReadTimeout` or `WriteTimeout`: this proxy fronts arbitrary traffic and a write deadline would truncate long downloads. `serve` handles `SIGINT`/`SIGTERM` and calls `srv.Shutdown`, which waits for in-flight requests but not for hijacked connections.
+- **Forwarding:** The `Rewrite` hook calls `pr.SetURL(target)` (which also points the outbound `Host` header at the target) and `pr.SetXForwarded()`.
+- **Streaming Exceptions:** `RoundTrip` buffers the response body to log it, except for three cases returned before the deferred `Close`: `101 Switching Protocols` (the body is the hijacked connection and `httputil.ReverseProxy` asserts it back to `io.ReadWriteCloser`), `text/event-stream`, and `-responses=false`. The order of these early returns is load-bearing.
+- **Request Capture:** `logRequest` uses `httputil.DumpRequestOut(r, false)` for headers, which leaves `r.Body` untouched and avoids the chunked framing that `body=true` would print as payload. `captureRequestBody` then reads only the logged prefix and splices it back in front of the remainder with `readCloser`, so the upstream still receives every byte.
+- **Decompression:** Supports `gzip`/`x-gzip`, `deflate`/`x-deflate` (zlib), and `br` (Brotli), provided by `github.com/andybalholm/brotli`. `Content-Encoding` may list several codings; they are undone in reverse order per RFC 9110 §8.4. Unsupported codings and decode failures produce an inline notice in the log rather than a wall of binary.
 - **Docker:** Multi-stage build with `gcr.io/distroless/static` final image, runs as non-root user.
-- **CI:** GitHub Actions — lint (golangci-lint v2), build, test with `-race`.
+- **CI:** GitHub Actions — lint (golangci-lint v2), build, `gofumpt` formatting check, test with `-race -shuffle=on`. Runs on pushes to every branch, including `main`.
 - **Syntax Highlighting:**
   - JSON: Unmarshaled to `interface{}` then recursively traversed for colored pretty-printing.
   - XML: Uses a two-pass `xml.Decoder` approach to preserve namespace prefixes and handle indentation.

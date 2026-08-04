@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"strings"
 	"testing"
 	"time"
@@ -32,14 +31,7 @@ func TestHighlightHeadersResponse(t *testing.T) {
 }
 
 func TestHighlightHeadersWithColorsDisabled(t *testing.T) {
-	// Save original state
-	originalNoColor := noColor
-	if noColor == nil {
-		noColor = flag.Bool("no-color", false, "disable colored output")
-	}
-	defer func() { noColor = originalNoColor }()
-
-	*noColor = true
+	setNoColor(t, true)
 
 	headers := []byte("POST /foo HTTP/1.1\r\nHost: example.com\r\n\r\n")
 	out := string(highlightHeaders(headers, true))
@@ -76,16 +68,7 @@ func TestColorStatus(t *testing.T) {
 // Tests for color wrapping utility
 
 func TestWrapColorWithColorsEnabled(t *testing.T) {
-	// Save original state
-	originalNoColor := noColor
-	if noColor == nil {
-		// Initialize flag if not already done
-		noColor = flag.Bool("no-color", false, "disable colored output")
-	}
-	defer func() { noColor = originalNoColor }()
-
-	// Set no-color to false (colors enabled)
-	*noColor = false
+	setNoColor(t, false)
 
 	result := wrapColor("test", colorString)
 	expected := colorString + "test" + colorReset
@@ -95,16 +78,7 @@ func TestWrapColorWithColorsEnabled(t *testing.T) {
 }
 
 func TestWrapColorWithColorsDisabled(t *testing.T) {
-	// Save original state
-	originalNoColor := noColor
-	if noColor == nil {
-		// Initialize flag if not already done
-		noColor = flag.Bool("no-color", false, "disable colored output")
-	}
-	defer func() { noColor = originalNoColor }()
-
-	// Set no-color to true (colors disabled)
-	*noColor = true
+	setNoColor(t, true)
 
 	result := wrapColor("test", colorString)
 	expected := "test"
@@ -116,14 +90,7 @@ func TestWrapColorWithColorsDisabled(t *testing.T) {
 // Tests for time formatting
 
 func TestColoredTimeWithColorsEnabled(t *testing.T) {
-	// Save original state
-	originalNoColor := noColor
-	if noColor == nil {
-		noColor = flag.Bool("no-color", false, "disable colored output")
-	}
-	defer func() { noColor = originalNoColor }()
-
-	*noColor = false
+	setNoColor(t, false)
 
 	testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
 	result := coloredTime(testTime, colorTime)
@@ -137,14 +104,7 @@ func TestColoredTimeWithColorsEnabled(t *testing.T) {
 }
 
 func TestColoredTimeWithColorsDisabled(t *testing.T) {
-	// Save original state
-	originalNoColor := noColor
-	if noColor == nil {
-		noColor = flag.Bool("no-color", false, "disable colored output")
-	}
-	defer func() { noColor = originalNoColor }()
-
-	*noColor = true
+	setNoColor(t, true)
 
 	testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
 	result := coloredTime(testTime, colorTime)
@@ -159,14 +119,7 @@ func TestColoredTimeWithColorsDisabled(t *testing.T) {
 }
 
 func TestColoredTimeWithCustomColor(t *testing.T) {
-	// Save original state
-	originalNoColor := noColor
-	if noColor == nil {
-		noColor = flag.Bool("no-color", false, "disable colored output")
-	}
-	defer func() { noColor = originalNoColor }()
-
-	*noColor = false
+	setNoColor(t, false)
 
 	testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
 	result := coloredTime(testTime, colorReqMarker)

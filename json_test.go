@@ -1,19 +1,12 @@
 package main
 
 import (
-	"flag"
 	"strings"
 	"testing"
 )
 
 func TestHighlightBodyJSON(t *testing.T) {
-	// Ensure colors are enabled for this test
-	originalNoColor := noColor
-	if noColor == nil {
-		noColor = flag.Bool("no-color", false, "disable colored output")
-	}
-	defer func() { noColor = originalNoColor }()
-	*noColor = false
+	setNoColor(t, false)
 
 	data := []byte(`{"name":"Alice"}`)
 	out := string(highlightBody(data, "application/json"))
@@ -26,14 +19,7 @@ func TestHighlightBodyJSON(t *testing.T) {
 }
 
 func TestHighlightBodyJSONWithColorsDisabled(t *testing.T) {
-	// Save original state
-	originalNoColor := noColor
-	if noColor == nil {
-		noColor = flag.Bool("no-color", false, "disable colored output")
-	}
-	defer func() { noColor = originalNoColor }()
-
-	*noColor = true
+	setNoColor(t, true)
 
 	data := []byte(`{"name":"Alice"}`)
 	out := string(highlightBody(data, "application/json"))

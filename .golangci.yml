@@ -37,8 +37,14 @@ linters:
     gosec:
       excludes:
         - G706 # Log injection — expected for a debugging proxy that logs HTTP traffic
+        # Parsing untrusted XML is the point of the highlighter. encoding/xml
+        # never resolves external entities and ignores DTDs, and the input is
+        # already capped at maxLogBodySize before it reaches the decoder.
+        - G709
   exclusions:
     rules:
       - path: '(.+)_test\.go'
         linters:
           - gosec
+          - goconst # repeated literals in table-driven test cases are intentional
+          - unparam # test doubles have signatures fixed by the interface they implement

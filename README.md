@@ -47,22 +47,38 @@ Requires **Go 1.26+**.
 go build -o http-proxy-logger
 ```
 
+## Configuration
+
+Each setting is resolved in this order: **CLI flag → environment variable → default**.
+
+| Setting        | Flag          | Environment | Default               |
+|----------------|---------------|-------------|-----------------------|
+| Target URL     | `-target`     | `TARGET`    | `http://example.com`  |
+| Listen port    | `-port`       | `PORT`      | `1338`                |
+| Log requests   | `-requests`   | —           | `true`                |
+| Log responses  | `-responses`  | —           | `true`                |
+| Disable color  | `-no-color`   | `NO_COLOR`  | `false`               |
+
+`NO_COLOR` follows the [no-color.org](https://no-color.org/) convention: any
+non-empty value disables color. An empty value is ignored. Because CLI flags take
+precedence, an explicit `-no-color=false` keeps colors on even when `NO_COLOR` is set.
+
+The target URL must include a scheme and a host, and the port must be a number
+between 0 and 65535. The proxy reports the problem and exits if either is invalid.
+
+The proxy shuts down gracefully on `SIGINT` or `SIGTERM`, giving in-flight
+requests up to 10 seconds to finish.
+
 ## Running
-
-Set the `TARGET` environment variable to the upstream server and optionally
-`PORT` for the listen address. These values can also be provided with the
-`-target` and `-port` flags which override the environment.
-
-Use the `-requests` and `-responses` flags to control which messages are
-printed. Both default to `true`.
-
-Use the `-no-color` flag to disable colored output and remove ANSI color codes
-from the logs, useful for redirecting output to files or when colors are not
-desired.
 
 The tool automatically highlights JSON and XML bodies with syntax coloring and
 proper formatting while preserving important structural information like XML
 namespaces and namespace prefixes (e.g., `soapenv:Envelope`).
+
+Bodies larger than 1 MB are replaced with a short notice in the log; the full
+body is always forwarded to the client untouched. Decompression for logging is
+capped at the same limit, so a compressed payload that expands to gigabytes
+cannot exhaust memory.
 
 ### Local execution
 
@@ -90,6 +106,21 @@ responses. Add `-no-color=true` to disable colored output. Flags `-target` and
 
 The proxy will forward traffic to the target and log each request/response pair
 using the format shown above.
+
+## Known limitations
+
+- **Responses are buffered before being forwarded.** Protocol upgrades
+  (WebSocket, `101 Switching Protocols`), `text/event-stream` responses, and any
+  response when `-responses=false` is set are streamed straight through instead,
+  but every other response is held in memory until it has been fully received.
+- **The highlighters are lossy.** They are meant for reading, not for byte-exact
+  reproduction: XML `<!DOCTYPE>` declarations are dropped, surrounding whitespace
+  in text nodes is trimmed, CDATA sections are unwrapped, and JSON object keys are
+  sorted, duplicates collapsed, and integers beyond 2^53 lose precision. The body
+  forwarded to the client is never affected.
+- **This is a reverse proxy**, not a forward proxy: there is no `CONNECT` support
+  and no TLS listener, and `Location` headers in redirects are passed through
+  unrewritten.
 
 ## License
 

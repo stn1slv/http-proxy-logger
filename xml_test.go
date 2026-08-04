@@ -1,20 +1,12 @@
 package main
 
 import (
-	"flag"
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestHighlightBodyXML(t *testing.T) {
-	// Ensure colors are enabled for this test
-	originalNoColor := noColor
-	if noColor == nil {
-		noColor = flag.Bool("no-color", false, "disable colored output")
-	}
-	defer func() { noColor = originalNoColor }()
-	*noColor = false
+	setNoColor(t, false)
 
 	data := []byte(`<p>Hello</p>`)
 	out := string(highlightBody(data, "application/xml"))
@@ -27,9 +19,7 @@ func TestHighlightBodyXML(t *testing.T) {
 }
 
 func TestXMLNamespacePreservation(t *testing.T) {
-	// Reset flags
-	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-	noColor = flag.Bool("no-color", true, "disable colored output")
+	setNoColor(t, true)
 
 	soapBody := []byte(`<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
@@ -68,9 +58,7 @@ func TestXMLNamespacePreservation(t *testing.T) {
 }
 
 func TestXMLMultipleNamespaces(t *testing.T) {
-	// Reset flags
-	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-	noColor = flag.Bool("no-color", true, "disable colored output")
+	setNoColor(t, true)
 
 	xmlBody := []byte(`<?xml version="1.0"?>
 <root xmlns:a="http://example.com/a" xmlns:b="http://example.com/b">
@@ -107,9 +95,7 @@ func TestXMLMultipleNamespaces(t *testing.T) {
 }
 
 func TestXMLDefaultNamespace(t *testing.T) {
-	// Reset flags
-	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-	noColor = flag.Bool("no-color", true, "disable colored output")
+	setNoColor(t, true)
 
 	xmlBody := []byte(`<?xml version="1.0"?>
 <root xmlns="http://example.com/default">
@@ -132,8 +118,7 @@ func TestXMLDefaultNamespace(t *testing.T) {
 }
 
 func TestHighlightXMLWithComments(t *testing.T) {
-	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-	noColor = flag.Bool("no-color", true, "disable colored output")
+	setNoColor(t, true)
 
 	xmlBody := []byte(`<?xml version="1.0"?>
 <root>
@@ -159,9 +144,7 @@ func TestHighlightXMLInvalid(t *testing.T) {
 }
 
 func TestXMLInlineTextFormatting(t *testing.T) {
-	// Reset flags
-	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-	noColor = flag.Bool("no-color", true, "disable colored output")
+	setNoColor(t, true)
 
 	// Test case: SOAP request with simple text elements
 	soapRequest := []byte(`<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
@@ -241,9 +224,7 @@ func TestXMLInlineTextFormatting(t *testing.T) {
 }
 
 func TestXMLMixedContent(t *testing.T) {
-	// Reset flags
-	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
-	noColor = flag.Bool("no-color", true, "disable colored output")
+	setNoColor(t, true)
 
 	// Test various element types: simple text, nested elements, empty elements
 	xmlBody := []byte(`<?xml version="1.0"?>

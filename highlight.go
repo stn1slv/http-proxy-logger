@@ -37,7 +37,7 @@ const (
 )
 
 func wrapColor(s, color string) string {
-	if *noColor {
+	if noColor {
 		return s
 	}
 	return color + s + colorReset
