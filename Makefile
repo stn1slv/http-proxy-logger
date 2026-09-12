@@ -1,4 +1,5 @@
 APP_NAME := http-proxy-logger
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 .PHONY: setup test lint format build run clean upgrade-deps docker-build
 
@@ -17,7 +18,7 @@ format:
 	gofumpt -extra -w .
 
 build:
-	CGO_ENABLED=0 go build -ldflags="-s -w" -o $(APP_NAME)
+	CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=$(VERSION)" -o $(APP_NAME)
 
 run: build
 	./$(APP_NAME)

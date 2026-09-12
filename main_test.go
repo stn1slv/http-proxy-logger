@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -12,9 +13,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/andybalholm/brotli"
 )
@@ -44,6 +47,19 @@ func setString(t *testing.T, target *string, v string) {
 func setNoColor(t *testing.T, v bool) {
 	t.Helper()
 	setBool(t, &noColor, v)
+}
+
+// guardFlagVars restores every flag-backed variable after the test.
+// registerFlags writes each default straight into its target, so all of them
+// must be guarded, not just the one under test.
+func guardFlagVars(t *testing.T) {
+	t.Helper()
+	setNoColor(t, noColor)
+	setBool(t, &logRequests, logRequests)
+	setBool(t, &logResponses, logResponses)
+	setBool(t, &showVersion, showVersion)
+	setString(t, &cliTarget, cliTarget)
+	setString(t, &cliPort, cliPort)
 }
 
 // compressGzip returns gzip-compressed bytes.
@@ -506,12 +522,17 @@ func captureLog(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
-// fakeTransport returns a canned response instead of contacting a server.
+// fakeTransport returns a canned response, or err when set, instead of
+// contacting a server.
 type fakeTransport struct {
 	response *http.Response
+	err      error
 }
 
 func (f fakeTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	return f.response, nil
 }
 
@@ -619,6 +640,99 @@ func TestRoundTripSkipsBodyWhenResponseLoggingDisabled(t *testing.T) {
 	// The caller still owns the body here, so RoundTrip must not have closed it.
 	if conn.closeCount != 0 {
 		t.Errorf("body closed %d times; it is being handed back to the caller", conn.closeCount)
+	}
+}
+
+func TestRoundTripLogsUpstreamError(t *testing.T) {
+	upstreamErr := errors.New("dial tcp 127.0.0.1:1: connection refused")
+
+	for _, logResp := range []bool{true, false} {
+		t.Run(fmt.Sprintf("responses=%v", logResp), func(t *testing.T) {
+			setNoColor(t, true)
+			setBool(t, &logRequests, false)
+			setBool(t, &logResponses, logResp)
+			logged := captureLog(t)
+
+			req, err := http.NewRequest(http.MethodGet, "http://example.invalid/", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = DebugTransport{Transport: fakeTransport{err: upstreamErr}}.RoundTrip(req)
+			if !errors.Is(err, upstreamErr) {
+				t.Fatalf("RoundTrip error = %v, want %v", err, upstreamErr)
+			}
+
+			out := logged.String()
+			if !logResp {
+				if out != "" {
+					t.Errorf("logged output with -responses=false:\n%s", out)
+				}
+				return
+			}
+			pattern := regexp.MustCompile(`--- RESPONSE \d+ \(upstream error: ` + regexp.QuoteMeta(upstreamErr.Error()) + `, \S+\) ---`)
+			if !pattern.MatchString(out) {
+				t.Errorf("log does not match %q, got:\n%s", pattern, out)
+			}
+		})
+	}
+}
+
+func TestRoundTripLogsLatency(t *testing.T) {
+	setNoColor(t, true)
+	setBool(t, &logRequests, false)
+	setBool(t, &logResponses, true)
+	logged := captureLog(t)
+
+	_, err := roundTripCanned(t, &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Proto:      "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
+		Header: http.Header{},
+		Body:   io.NopCloser(strings.NewReader("ok")),
+	})
+	if err != nil {
+		t.Fatalf("RoundTrip failed: %v", err)
+	}
+	pattern := regexp.MustCompile(`--- RESPONSE \d+ \(200 OK, [0-9.]+[a-zµ]*s\) ---`)
+	if out := logged.String(); !pattern.MatchString(out) {
+		t.Errorf("log does not match %q, got:\n%s", pattern, out)
+	}
+}
+
+func TestFormatElapsed(t *testing.T) {
+	tests := []struct {
+		in   time.Duration
+		want string
+	}{
+		{in: 0, want: "0s"},
+		{in: 412345 * time.Nanosecond, want: "412µs"},
+		{in: 134567 * time.Microsecond, want: "135ms"},
+		{in: 2345 * time.Millisecond, want: "2.345s"},
+	}
+	for _, tt := range tests {
+		if got := formatElapsed(tt.in); got != tt.want {
+			t.Errorf("formatElapsed(%v) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestRegisterFlagsVersion(t *testing.T) {
+	for _, arg := range []string{"-v", "--v", "-version", "--version"} {
+		t.Run(arg, func(t *testing.T) {
+			guardFlagVars(t)
+
+			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			registerFlags(fs)
+			if showVersion {
+				t.Fatal("showVersion is true before parsing")
+			}
+			if err := fs.Parse([]string{arg}); err != nil {
+				t.Fatal(err)
+			}
+			if !showVersion {
+				t.Errorf("%s did not set showVersion", arg)
+			}
+		})
 	}
 }
 
@@ -864,13 +978,7 @@ func TestResolveNoColor(t *testing.T) {
 			} else {
 				_ = os.Unsetenv("NO_COLOR")
 			}
-			// registerFlags writes every default straight into its target, so
-			// all five must be guarded, not just the one under test.
-			setNoColor(t, false)
-			setBool(t, &logRequests, logRequests)
-			setBool(t, &logResponses, logResponses)
-			setString(t, &cliTarget, cliTarget)
-			setString(t, &cliPort, cliPort)
+			guardFlagVars(t)
 
 			fs := flag.NewFlagSet("test", flag.ContinueOnError)
 			registerFlags(fs)

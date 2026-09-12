@@ -6,6 +6,8 @@ are automatically decompressed in the logs so that you can easily inspect them.
 The output uses ANSI colors similar to `HTTPie`: request and response lines,
 header names, and JSON or XML bodies are highlighted for readability.
 
+> **For debugging only.** This tool is meant for local development and troubleshooting. It logs full request and response headers and bodies, including credentials such as `Authorization` headers and cookies, and it is not built for production traffic or untrusted networks.
+
 ## Example output
 
 ![Example output](.img/example.png)
@@ -32,6 +34,8 @@ curl -fsSL https://github.com/stn1slv/http-proxy-logger/releases/latest/download
 chmod +x http-proxy-logger
 sudo mv http-proxy-logger /usr/local/bin/
 ```
+
+Releases after v1.2.4 also include a `SHA256SUMS` file. To verify a download, save it next to the binary before renaming the binary, then run `sha256sum -c SHA256SUMS --ignore-missing`.
 
 ### Docker
 
@@ -68,6 +72,8 @@ between 0 and 65535. The proxy reports the problem and exits if either is invali
 
 The proxy shuts down gracefully on `SIGINT` or `SIGTERM`, giving in-flight
 requests up to 10 seconds to finish.
+
+Run `http-proxy-logger -v` (or `--version`) to print the version and exit.
 
 ## Running
 
@@ -106,6 +112,8 @@ responses. Add `-no-color=true` to disable colored output. Flags `-target` and
 
 The proxy will forward traffic to the target and log each request/response pair
 using the format shown above.
+
+Each response marker shows the status and the time since the request was sent upstream, for example `--- RESPONSE 3 (200 OK, 134ms) ---`. If the upstream cannot be reached, the entry reads `--- RESPONSE 3 (upstream error: ..., 2ms) ---` instead, so every request has a matching response entry.
 
 ## Known limitations
 

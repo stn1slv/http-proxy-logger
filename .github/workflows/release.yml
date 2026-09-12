@@ -23,10 +23,16 @@ jobs:
         run: go mod download
 
       - name: Test
-        run: go test -race -v ./...
+        run: go test -race -shuffle=on -v ./...
 
       - name: Build all platforms
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
+          # Extract version: v.1.2.3 → 1.2.3 or v1.2.3 → 1.2.3
+          VERSION="${TAG#v}"
+          VERSION="${VERSION#.}"
+
           platforms=(
             "linux/amd64"
             "linux/arm64"
@@ -44,7 +50,7 @@ jobs:
             fi
             echo "Building ${GOOS}/${GOARCH}..."
             CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
-              go build -ldflags="-s -w" -o "$binary"
+              go build -ldflags="-s -w -X main.version=${VERSION}" -o "$binary"
 
             # Create tarball
             tar czf "http-proxy-logger_${GOOS}_${GOARCH}.tar.gz" "$binary"
@@ -56,6 +62,8 @@ jobs:
             fi
             mv "$binary" "$raw"
           done
+
+          sha256sum http-proxy-logger-* http-proxy-logger_*.tar.gz > SHA256SUMS
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -69,6 +77,7 @@ jobs:
             http-proxy-logger-darwin-amd64
             http-proxy-logger-darwin-arm64
             http-proxy-logger_*.tar.gz
+            SHA256SUMS
 
   update-homebrew:
     needs: release
