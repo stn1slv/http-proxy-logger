@@ -348,11 +348,16 @@ func logResponse(response *http.Response, body []byte, counter int64, elapsed ti
 	log.Printf("%s %s\n\n%s%s\n\n", coloredTime(time.Now(), colorResMarker), line, headers, body)
 }
 
-// logUpstreamError logs a failed upstream call under the same counter as its
-// request, so every REQUEST entry has a matching RESPONSE entry.
-func logUpstreamError(err error, counter int64, elapsed time.Duration) {
-	line := wrapColor(fmt.Sprintf("--- RESPONSE %d (upstream error: %v, %s) ---", counter, err, formatElapsed(elapsed)), colorStatus5xx)
-	log.Printf("%s %s\n\n", coloredTime(time.Now(), colorStatus5xx), line)
+// logResponseError logs a failed upstream call under the same counter as its
+// request, so every REQUEST entry has a matching RESPONSE entry. A canceled
+// context means the client went away, so it is not blamed on the upstream.
+func logResponseError(err error, counter int64, elapsed time.Duration) {
+	label, color := fmt.Sprintf("upstream error: %v", err), colorStatus5xx
+	if errors.Is(err, context.Canceled) {
+		label, color = "client canceled", colorStatus4xx
+	}
+	line := wrapColor(fmt.Sprintf("--- RESPONSE %d (%s, %s) ---", counter, label, formatElapsed(elapsed)), color)
+	log.Printf("%s %s\n\n", coloredTime(time.Now(), color), line)
 }
 
 // RoundTrip implements the http.RoundTripper interface.
@@ -368,7 +373,7 @@ func (t DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	response, err := t.upstream().RoundTrip(r)
 	if err != nil {
 		if logResponses {
-			logUpstreamError(err, counter, time.Since(start))
+			logResponseError(err, counter, time.Since(start))
 		}
 		return nil, err
 	}
@@ -396,12 +401,16 @@ func (t DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	defer func() { _ = origBody.Close() }()
 
 	bodyBytes, err := io.ReadAll(origBody)
+	// Measured before formatting, so the time spent decoding and highlighting
+	// the body for the log is not reported as upstream latency.
+	elapsed := time.Since(start)
 	if err != nil {
+		logResponseError(err, counter, elapsed)
 		return nil, err
 	}
 
 	logResponse(response, formatBodyForLog(bodyBytes, int64(len(bodyBytes)),
-		response.Header.Get("Content-Encoding"), response.Header.Get("Content-Type")), counter, time.Since(start))
+		response.Header.Get("Content-Encoding"), response.Header.Get("Content-Type")), counter, elapsed)
 
 	response.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	return response, nil

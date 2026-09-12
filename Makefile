@@ -1,5 +1,6 @@
 APP_NAME := http-proxy-logger
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# Strip the leading "v" (or "v.") like the release workflow does.
+VERSION := $(shell (git describe --tags --always --dirty 2>/dev/null || echo dev) | sed -E 's/^v\.?//')
 
 .PHONY: setup test lint format build run clean upgrade-deps docker-build
 

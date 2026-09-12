@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -17,6 +18,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/andybalholm/brotli"
@@ -644,33 +646,76 @@ func TestRoundTripSkipsBodyWhenResponseLoggingDisabled(t *testing.T) {
 }
 
 func TestRoundTripLogsUpstreamError(t *testing.T) {
-	upstreamErr := errors.New("dial tcp 127.0.0.1:1: connection refused")
+	dialErr := errors.New("dial tcp 127.0.0.1:1: connection refused")
+	bodyErr := errors.New("unexpected EOF")
+	canceled := fmt.Errorf("read tcp: %w", context.Canceled)
 
-	for _, logResp := range []bool{true, false} {
-		t.Run(fmt.Sprintf("responses=%v", logResp), func(t *testing.T) {
+	tests := []struct {
+		name         string
+		logResponses bool
+		transport    fakeTransport
+		wantErr      error
+		wantMarker   string // regexp; empty means nothing may be logged
+	}{
+		{
+			name:         "transport error",
+			logResponses: true,
+			transport:    fakeTransport{err: dialErr},
+			wantErr:      dialErr,
+			wantMarker:   `--- RESPONSE \d+ \(upstream error: ` + regexp.QuoteMeta(dialErr.Error()) + `, \S+\) ---`,
+		},
+		{
+			name:         "body read error",
+			logResponses: true,
+			transport: fakeTransport{response: &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Proto:      "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
+				Header: http.Header{},
+				Body:   io.NopCloser(iotest.ErrReader(bodyErr)),
+			}},
+			wantErr:    bodyErr,
+			wantMarker: `--- RESPONSE \d+ \(upstream error: ` + regexp.QuoteMeta(bodyErr.Error()) + `, \S+\) ---`,
+		},
+		{
+			name:         "client canceled",
+			logResponses: true,
+			transport:    fakeTransport{err: canceled},
+			wantErr:      context.Canceled,
+			wantMarker:   `--- RESPONSE \d+ \(client canceled, \S+\) ---`,
+		},
+		{
+			name:         "response logging disabled",
+			logResponses: false,
+			transport:    fakeTransport{err: dialErr},
+			wantErr:      dialErr,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			setNoColor(t, true)
 			setBool(t, &logRequests, false)
-			setBool(t, &logResponses, logResp)
+			setBool(t, &logResponses, tt.logResponses)
 			logged := captureLog(t)
 
 			req, err := http.NewRequest(http.MethodGet, "http://example.invalid/", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = DebugTransport{Transport: fakeTransport{err: upstreamErr}}.RoundTrip(req)
-			if !errors.Is(err, upstreamErr) {
-				t.Fatalf("RoundTrip error = %v, want %v", err, upstreamErr)
+			_, err = DebugTransport{Transport: tt.transport}.RoundTrip(req)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("RoundTrip error = %v, want %v", err, tt.wantErr)
 			}
 
 			out := logged.String()
-			if !logResp {
+			if tt.wantMarker == "" {
 				if out != "" {
 					t.Errorf("logged output with -responses=false:\n%s", out)
 				}
 				return
 			}
-			pattern := regexp.MustCompile(`--- RESPONSE \d+ \(upstream error: ` + regexp.QuoteMeta(upstreamErr.Error()) + `, \S+\) ---`)
-			if !pattern.MatchString(out) {
+			if pattern := regexp.MustCompile(tt.wantMarker); !pattern.MatchString(out) {
 				t.Errorf("log does not match %q, got:\n%s", pattern, out)
 			}
 		})

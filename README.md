@@ -113,7 +113,7 @@ responses. Add `-no-color=true` to disable colored output. Flags `-target` and
 The proxy will forward traffic to the target and log each request/response pair
 using the format shown above.
 
-Each response marker shows the status and the time since the request was sent upstream, for example `--- RESPONSE 3 (200 OK, 134ms) ---`. If the upstream cannot be reached, the entry reads `--- RESPONSE 3 (upstream error: ..., 2ms) ---` instead, so every request has a matching response entry.
+Each response marker shows the status and the time from sending the request upstream until the full response arrived (for protocol upgrades and event streams, until the headers arrived), for example `--- RESPONSE 3 (200 OK, 134ms) ---`. If the upstream cannot be reached or the response breaks off, the entry reads `--- RESPONSE 3 (upstream error: ..., 2ms) ---` instead, and `--- RESPONSE 3 (client canceled, 5ms) ---` if the client disconnected first. Every request has a matching response entry.
 
 ## Known limitations
 
