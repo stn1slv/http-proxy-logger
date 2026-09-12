@@ -46,6 +46,9 @@ const (
 	defaultTarget = "http://example.com"
 )
 
+// version is the release version, set at build time with -ldflags "-X main.version=...".
+var version = "dev"
+
 // reqCounter is a global atomic counter for request/response pairs.
 var reqCounter atomic.Int64
 
@@ -57,6 +60,7 @@ var (
 	cliTarget    string
 	cliPort      string
 	noColor      bool
+	showVersion  bool
 )
 
 // registerFlags binds the configuration variables to fs. It is called from main
@@ -67,6 +71,8 @@ func registerFlags(fs *flag.FlagSet) {
 	fs.StringVar(&cliTarget, "target", "", "upstream target URL (overrides TARGET)")
 	fs.StringVar(&cliPort, "port", "", "listen port (overrides PORT)")
 	fs.BoolVar(&noColor, "no-color", false, "disable colored output")
+	fs.BoolVar(&showVersion, "version", false, "print the version and exit")
+	fs.BoolVar(&showVersion, "v", false, "print the version and exit (shorthand)")
 }
 
 // readCloser pairs a Reader with a Closer belonging to a different value, so a
@@ -318,9 +324,19 @@ func logRequest(r *http.Request, counter int64) {
 	log.Printf("%s %s\n\n%s%s\n\n", coloredTime(time.Now(), colorReqMarker), line, headers, body)
 }
 
+// formatElapsed rounds a duration for log markers: to milliseconds, or to
+// microseconds below one millisecond so fast local calls do not read "0s".
+func formatElapsed(d time.Duration) string {
+	if d < time.Millisecond {
+		return d.Round(time.Microsecond).String()
+	}
+	return d.Round(time.Millisecond).String()
+}
+
 // logResponse logs the incoming response. Pass a nil body for responses that are
-// streamed straight through to the client.
-func logResponse(response *http.Response, body []byte, counter int64) {
+// streamed straight through to the client. elapsed is the time since the request
+// was sent upstream.
+func logResponse(response *http.Response, body []byte, counter int64, elapsed time.Duration) {
 	var headers []byte
 	if dump, err := httputil.DumpResponse(response, false); err != nil {
 		headers = fmt.Appendf(nil, "[failed to dump response headers: %v]\r\n\r\n", err)
@@ -328,8 +344,20 @@ func logResponse(response *http.Response, body []byte, counter int64) {
 		headers = append(highlightHeaders(bytes.TrimSuffix(dump, []byte("\r\n\r\n")), false), []byte("\r\n\r\n")...)
 	}
 
-	line := wrapColor(fmt.Sprintf("--- RESPONSE %d (%s) ---", counter, response.Status), colorResMarker)
+	line := wrapColor(fmt.Sprintf("--- RESPONSE %d (%s, %s) ---", counter, response.Status, formatElapsed(elapsed)), colorResMarker)
 	log.Printf("%s %s\n\n%s%s\n\n", coloredTime(time.Now(), colorResMarker), line, headers, body)
+}
+
+// logResponseError logs a failed upstream call under the same counter as its
+// request, so every REQUEST entry has a matching RESPONSE entry. A canceled
+// context means the client went away, so it is not blamed on the upstream.
+func logResponseError(err error, counter int64, elapsed time.Duration) {
+	label, color := fmt.Sprintf("upstream error: %v", err), colorStatus5xx
+	if errors.Is(err, context.Canceled) {
+		label, color = "client canceled", colorStatus4xx
+	}
+	line := wrapColor(fmt.Sprintf("--- RESPONSE %d (%s, %s) ---", counter, label, formatElapsed(elapsed)), color)
+	log.Printf("%s %s\n\n", coloredTime(time.Now(), color), line)
 }
 
 // RoundTrip implements the http.RoundTripper interface.
@@ -341,8 +369,12 @@ func (t DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		logRequest(r, counter)
 	}
 
+	start := time.Now()
 	response, err := t.upstream().RoundTrip(r)
 	if err != nil {
+		if logResponses {
+			logResponseError(err, counter, time.Since(start))
+		}
 		return nil, err
 	}
 
@@ -356,12 +388,12 @@ func (t DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		// The body is the hijacked connection. httputil.ReverseProxy requires it
 		// to remain an io.ReadWriteCloser, and reading it would block until the
 		// peer disconnects.
-		logResponse(response, []byte("[connection upgraded: body not captured]"), counter)
+		logResponse(response, []byte("[connection upgraded: body not captured]"), counter, time.Since(start))
 		return response, nil
 	case isEventStream(response):
 		// Buffering an event stream would withhold every event until the
 		// upstream closed the connection.
-		logResponse(response, []byte("[event stream: body not captured]"), counter)
+		logResponse(response, []byte("[event stream: body not captured]"), counter, time.Since(start))
 		return response, nil
 	}
 
@@ -369,12 +401,16 @@ func (t DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	defer func() { _ = origBody.Close() }()
 
 	bodyBytes, err := io.ReadAll(origBody)
+	// Measured before formatting, so the time spent decoding and highlighting
+	// the body for the log is not reported as upstream latency.
+	elapsed := time.Since(start)
 	if err != nil {
+		logResponseError(err, counter, elapsed)
 		return nil, err
 	}
 
 	logResponse(response, formatBodyForLog(bodyBytes, int64(len(bodyBytes)),
-		response.Header.Get("Content-Encoding"), response.Header.Get("Content-Type")), counter)
+		response.Header.Get("Content-Encoding"), response.Header.Get("Content-Type")), counter, elapsed)
 
 	response.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	return response, nil
@@ -446,7 +482,12 @@ func resolveNoColor(fs *flag.FlagSet, current bool) bool {
 func main() {
 	registerFlags(flag.CommandLine)
 	flag.Parse()
+	if showVersion {
+		fmt.Println("http-proxy-logger", version)
+		return
+	}
 	noColor = resolveNoColor(flag.CommandLine, noColor)
+	log.SetOutput(os.Stdout)
 	log.SetFlags(0)
 
 	rawTarget := getTarget()
