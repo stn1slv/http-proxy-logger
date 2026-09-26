@@ -993,6 +993,73 @@ func TestRoundTripPreservesLargeRequestBody(t *testing.T) {
 	}
 }
 
+func TestRoundTripStreamsLargeResponseBody(t *testing.T) {
+	// Only the logged prefix of a response is read before RoundTrip returns. The
+	// upstream holds back the rest until RoundTrip has returned, which would
+	// deadlock if the whole body were buffered first.
+	setNoColor(t, true)
+	logs := captureLog(t)
+
+	head := bytes.Repeat([]byte("h"), maxLogBodySize+1024)
+	tail := []byte("tail")
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write(head)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-release
+		_, _ = w.Write(tail)
+	}))
+	defer upstream.Close()
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+
+	req, err := http.NewRequest(http.MethodGet, upstream.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		resp *http.Response
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		resp, err := DebugTransport{}.RoundTrip(req)
+		done <- result{resp, err}
+	}()
+
+	var res result
+	select {
+	case res = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RoundTrip did not return before the upstream finished the body")
+	}
+	if res.err != nil {
+		t.Fatalf("RoundTrip failed: %v", res.err)
+	}
+	defer func() { _ = res.resp.Body.Close() }()
+
+	close(release)
+	body, err := io.ReadAll(res.resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := append(append([]byte{}, head...), tail...); !bytes.Equal(body, want) {
+		t.Errorf("client received %d bytes, want %d", len(body), len(want))
+	}
+	if want := fmt.Sprintf("[body too large to display: over %d bytes]", maxLogBodySize); !strings.Contains(logs.String(), want) {
+		t.Errorf("log does not contain %q", want)
+	}
+}
+
 func TestResolveNoColor(t *testing.T) {
 	tests := []struct {
 		name   string

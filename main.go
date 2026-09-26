@@ -378,9 +378,9 @@ func (t DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 
-	// These responses are forwarded without buffering. The early returns must
-	// stay above the deferred Close below, which would otherwise close a body
-	// that is being handed back to the caller.
+	// These responses are forwarded without capturing any of the body. The early
+	// returns must stay above the read below, which would otherwise consume a
+	// body that is being handed back to the caller.
 	switch {
 	case !logResponses:
 		return response, nil
@@ -397,22 +397,32 @@ func (t DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		return response, nil
 	}
 
+	// Only the logged prefix is read here, as captureRequestBody does for
+	// requests. It is spliced back in front of the remainder, so a large download
+	// streams to the client instead of being held in memory.
 	origBody := response.Body
-	defer func() { _ = origBody.Close() }()
-
-	bodyBytes, err := io.ReadAll(origBody)
+	head, err := readLimited(origBody)
 	// Measured before formatting, so the time spent decoding and highlighting
 	// the body for the log is not reported as upstream latency.
 	elapsed := time.Since(start)
 	if err != nil {
+		_ = origBody.Close()
 		logResponseError(err, counter, elapsed)
 		return nil, err
 	}
 
-	logResponse(response, formatBodyForLog(bodyBytes, int64(len(bodyBytes)),
+	wireSize := int64(len(head))
+	if len(head) <= maxLogBodySize {
+		// The whole body has been read, so the upstream connection is released now.
+		_ = origBody.Close()
+		response.Body = io.NopCloser(bytes.NewReader(head))
+	} else {
+		// Only the prefix was read, so the full size is known only from the header.
+		wireSize = response.ContentLength
+		response.Body = readCloser{Reader: io.MultiReader(bytes.NewReader(head), origBody), Closer: origBody}
+	}
+	logResponse(response, formatBodyForLog(head, wireSize,
 		response.Header.Get("Content-Encoding"), response.Header.Get("Content-Type")), counter, elapsed)
-
-	response.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	return response, nil
 }
 
