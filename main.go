@@ -210,6 +210,17 @@ func decodeForLog(body []byte, contentEncoding string) (out []byte, decompressed
 // wireSize is the encoded length of the full body, or -1 when it is unknown.
 // It never fails, because a logging problem must not break proxying.
 func formatBodyForLog(body []byte, wireSize int64, contentEncoding, contentType string) []byte {
+	// A capture longer than the limit is only a prefix of the body. It is too large
+	// to display whatever it decodes to, and decoding a cut-off compressed stream
+	// would fail with "unexpected EOF" and log a misleading error.
+	if len(body) > maxLogBodySize {
+		// A declared size smaller than what already arrived is wrong, so it is not shown.
+		if wireSize >= int64(len(body)) {
+			return fmt.Appendf(nil, "[body too large to display: %d bytes]", wireSize)
+		}
+		return fmt.Appendf(nil, "[body too large to display: over %d bytes]", maxLogBodySize)
+	}
+
 	decoded, decompressed, notice := decodeForLog(body, contentEncoding)
 
 	// The notice goes first. A body that could not be decoded is still shown
@@ -220,15 +231,9 @@ func formatBodyForLog(body []byte, wireSize int64, contentEncoding, contentType 
 		notice += "\n"
 	}
 
-	if len(decoded) > maxLogBodySize {
-		switch {
-		case decompressed:
-			return fmt.Appendf(nil, "%s[decompressed body exceeds the %d byte log limit]", notice, maxLogBodySize)
-		case wireSize >= 0:
-			return fmt.Appendf(nil, "%s[body too large to display: %d bytes]", notice, wireSize)
-		default:
-			return fmt.Appendf(nil, "%s[body too large to display: over %d bytes]", notice, maxLogBodySize)
-		}
+	// body is within the limit here, so only decompression can make it larger.
+	if decompressed && len(decoded) > maxLogBodySize {
+		return fmt.Appendf(nil, "%s[decompressed body exceeds the %d byte log limit]", notice, maxLogBodySize)
 	}
 	return append([]byte(notice), highlightBody(decoded, contentType)...)
 }
@@ -360,6 +365,26 @@ func logResponseError(err error, counter int64, elapsed time.Duration) {
 	log.Printf("%s %s\n\n", coloredTime(time.Now(), color), line)
 }
 
+// streamErrorLogger logs the first read error of a streamed response body under
+// the response's counter. The failure happens after RoundTrip has returned, so
+// otherwise only httputil.ReverseProxy would report it, without the counter.
+// Only the proxy's copy loop reads the body, so no locking is needed.
+type streamErrorLogger struct {
+	r       io.Reader
+	counter int64
+	start   time.Time
+	logged  bool
+}
+
+func (s *streamErrorLogger) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) && !s.logged {
+		s.logged = true
+		logResponseError(err, s.counter, time.Since(s.start))
+	}
+	return n, err
+}
+
 // RoundTrip implements the http.RoundTripper interface.
 // It logs the outgoing request and incoming response with highlighted output.
 func (t DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -378,9 +403,9 @@ func (t DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 
-	// These responses are forwarded without buffering. The early returns must
-	// stay above the deferred Close below, which would otherwise close a body
-	// that is being handed back to the caller.
+	// These responses are forwarded without capturing any of the body. The early
+	// returns must stay above the read below, which would otherwise consume a
+	// body that is being handed back to the caller.
 	switch {
 	case !logResponses:
 		return response, nil
@@ -397,22 +422,33 @@ func (t DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		return response, nil
 	}
 
+	// Only the logged prefix is read here, as captureRequestBody does for
+	// requests. It is spliced back in front of the remainder, so a large download
+	// streams to the client instead of being held in memory.
 	origBody := response.Body
-	defer func() { _ = origBody.Close() }()
-
-	bodyBytes, err := io.ReadAll(origBody)
+	head, err := readLimited(origBody)
 	// Measured before formatting, so the time spent decoding and highlighting
 	// the body for the log is not reported as upstream latency.
 	elapsed := time.Since(start)
 	if err != nil {
+		_ = origBody.Close()
 		logResponseError(err, counter, elapsed)
 		return nil, err
 	}
 
-	logResponse(response, formatBodyForLog(bodyBytes, int64(len(bodyBytes)),
+	wireSize := int64(len(head))
+	if len(head) <= maxLogBodySize {
+		// The whole body has been read, so the upstream connection is released now.
+		_ = origBody.Close()
+		response.Body = io.NopCloser(bytes.NewReader(head))
+	} else {
+		// Only the prefix was read, so the full size is known only from the header.
+		wireSize = response.ContentLength
+		rest := &streamErrorLogger{r: origBody, counter: counter, start: start}
+		response.Body = readCloser{Reader: io.MultiReader(bytes.NewReader(head), rest), Closer: origBody}
+	}
+	logResponse(response, formatBodyForLog(head, wireSize,
 		response.Header.Get("Content-Encoding"), response.Header.Get("Content-Type")), counter, elapsed)
-
-	response.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	return response, nil
 }
 

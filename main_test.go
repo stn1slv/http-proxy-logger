@@ -993,6 +993,204 @@ func TestRoundTripPreservesLargeRequestBody(t *testing.T) {
 	}
 }
 
+func TestRoundTripStreamsLargeResponseBody(t *testing.T) {
+	// Only the logged prefix of a response is read before RoundTrip returns. The
+	// upstream holds back the rest until RoundTrip has returned, which would
+	// deadlock if the whole body were buffered first.
+	setNoColor(t, true)
+	logs := captureLog(t)
+
+	head := bytes.Repeat([]byte("h"), maxLogBodySize+1024)
+	tail := []byte("tail")
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write(head)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-release
+		_, _ = w.Write(tail)
+	}))
+	defer upstream.Close()
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+
+	req, err := http.NewRequest(http.MethodGet, upstream.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		resp *http.Response
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		resp, err := DebugTransport{}.RoundTrip(req)
+		done <- result{resp, err}
+	}()
+
+	var res result
+	select {
+	case res = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RoundTrip did not return before the upstream finished the body")
+	}
+	if res.err != nil {
+		t.Fatalf("RoundTrip failed: %v", res.err)
+	}
+	defer func() { _ = res.resp.Body.Close() }()
+
+	close(release)
+	body, err := io.ReadAll(res.resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := append(append([]byte{}, head...), tail...); !bytes.Equal(body, want) {
+		t.Errorf("client received %d bytes, want %d", len(body), len(want))
+	}
+	if want := fmt.Sprintf("[body too large to display: over %d bytes]", maxLogBodySize); !strings.Contains(logs.String(), want) {
+		t.Errorf("log does not contain %q", want)
+	}
+}
+
+// countingBody is a response body that records how often it is closed.
+type countingBody struct {
+	io.Reader
+	closeCount int
+}
+
+func (b *countingBody) Close() error { b.closeCount++; return nil }
+
+func TestRoundTripStreamedBodyClosesUpstreamOnce(t *testing.T) {
+	// A body over the log limit is handed to the client still open. The client's
+	// Close must reach the upstream body exactly once, and the declared length
+	// is reported in the log.
+	setNoColor(t, true)
+	setBool(t, &logRequests, false)
+	setBool(t, &logResponses, true)
+	logs := captureLog(t)
+
+	size := maxLogBodySize + 10
+	upstream := &countingBody{Reader: bytes.NewReader(bytes.Repeat([]byte("x"), size))}
+	got, err := roundTripCanned(t, &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Proto:      "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
+		Header:        http.Header{"Content-Type": {"text/plain"}},
+		ContentLength: int64(size),
+		Body:          upstream,
+	})
+	if err != nil {
+		t.Fatalf("RoundTrip failed: %v", err)
+	}
+	if upstream.closeCount != 0 {
+		t.Fatalf("upstream body closed %d times before the client read it", upstream.closeCount)
+	}
+	body, err := io.ReadAll(got.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) != size {
+		t.Errorf("client received %d bytes, want %d", len(body), size)
+	}
+	if err := got.Body.Close(); err != nil {
+		t.Errorf("closing the returned body failed: %v", err)
+	}
+	if upstream.closeCount != 1 {
+		t.Errorf("upstream body closed %d times, want exactly 1", upstream.closeCount)
+	}
+	if want := fmt.Sprintf("[body too large to display: %d bytes]", size); !strings.Contains(logs.String(), want) {
+		t.Errorf("log does not contain %q", want)
+	}
+}
+
+func TestRoundTripLogsStreamedBodyFailure(t *testing.T) {
+	// A failure after the logged prefix happens while the client reads the body,
+	// and must still be logged under the response's counter.
+	setNoColor(t, true)
+	setBool(t, &logRequests, false)
+	setBool(t, &logResponses, true)
+	logs := captureLog(t)
+
+	broken := errors.New("connection reset")
+	got, err := roundTripCanned(t, &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Proto:      "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
+		Header:        http.Header{"Content-Type": {"text/plain"}},
+		ContentLength: -1, // what http.Transport reports for a body of unknown length
+		Body: &countingBody{Reader: io.MultiReader(
+			bytes.NewReader(bytes.Repeat([]byte("x"), maxLogBodySize+10)),
+			iotest.ErrReader(broken),
+		)},
+	})
+	if err != nil {
+		t.Fatalf("RoundTrip failed: %v", err)
+	}
+	defer func() { _ = got.Body.Close() }()
+
+	if _, err := io.ReadAll(got.Body); !errors.Is(err, broken) {
+		t.Fatalf("read error = %v, want %v", err, broken)
+	}
+	// A second read fails again, but must not log a second time.
+	if _, err := got.Body.Read(make([]byte, 1)); !errors.Is(err, broken) {
+		t.Fatalf("second read error = %v, want %v", err, broken)
+	}
+
+	out := logs.String()
+	if n := strings.Count(out, "(upstream error: connection reset"); n != 1 {
+		t.Fatalf("failure logged %d times, want 1; log: %q", n, out)
+	}
+	markers := regexp.MustCompile(`--- RESPONSE (\d+) \(`).FindAllStringSubmatch(out, -1)
+	if len(markers) != 2 || markers[0][1] != markers[1][1] {
+		t.Errorf("want the response and its failure under one counter, got %v", markers)
+	}
+}
+
+func TestCaptureRequestBodySkipsDecodingTruncatedCapture(t *testing.T) {
+	// formatBodyForLog is shared with requests, so an oversized compressed upload
+	// is also reported by size rather than as a decode failure.
+	body := bytes.Repeat([]byte{0x1f}, maxLogBodySize+1)
+	r, err := http.NewRequest(http.MethodPost, "http://example.invalid/", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Header.Set("Content-Encoding", encodingGzip)
+
+	got := string(captureRequestBody(r))
+	if want := fmt.Sprintf("[body too large to display: %d bytes]", len(body)); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestFormatBodyForLogIgnoresImpossibleDeclaredSize(t *testing.T) {
+	// A declared length smaller than what already arrived cannot be right.
+	got := string(formatBodyForLog(bytes.Repeat([]byte("x"), maxLogBodySize+1), 0, "", "text/plain"))
+	if want := fmt.Sprintf("[body too large to display: over %d bytes]", maxLogBodySize); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestFormatBodyForLogSkipsDecodingTruncatedCapture(t *testing.T) {
+	// A capture over the limit is a cut-off prefix. Decoding it would fail with
+	// "unexpected EOF", which says nothing about the real body.
+	prefix := bytes.Repeat([]byte{0x1f}, maxLogBodySize+1)
+	got := string(formatBodyForLog(prefix, 5*maxLogBodySize, encodingGzip, "application/octet-stream"))
+	if strings.Contains(got, "decode failed") {
+		t.Errorf("truncated capture was decoded: %q", got)
+	}
+	if want := fmt.Sprintf("[body too large to display: %d bytes]", 5*maxLogBodySize); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 func TestResolveNoColor(t *testing.T) {
 	tests := []struct {
 		name   string
