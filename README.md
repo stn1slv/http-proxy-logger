@@ -39,8 +39,10 @@ Releases after v1.2.4 also include a `SHA256SUMS` file. To verify a download, sa
 
 ### Docker
 
+The image is not published with releases, so build it from a clone of this repository:
+
 ```bash
-docker pull stn1slv/http-proxy-logger
+make docker-build
 ```
 
 ### From source
