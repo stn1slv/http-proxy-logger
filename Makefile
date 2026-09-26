@@ -32,4 +32,4 @@ upgrade-deps:
 	go mod tidy
 
 docker-build:
-	docker build -t stn1slv/http-proxy-logger .
+	docker build --build-arg VERSION=$(VERSION) -t stn1slv/http-proxy-logger .
