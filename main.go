@@ -210,6 +210,16 @@ func decodeForLog(body []byte, contentEncoding string) (out []byte, decompressed
 // wireSize is the encoded length of the full body, or -1 when it is unknown.
 // It never fails, because a logging problem must not break proxying.
 func formatBodyForLog(body []byte, wireSize int64, contentEncoding, contentType string) []byte {
+	// A capture longer than the limit is only a prefix of the body. It is too large
+	// to display whatever it decodes to, and decoding a cut-off compressed stream
+	// would fail with "unexpected EOF" and log a misleading error.
+	if len(body) > maxLogBodySize {
+		if wireSize >= 0 {
+			return fmt.Appendf(nil, "[body too large to display: %d bytes]", wireSize)
+		}
+		return fmt.Appendf(nil, "[body too large to display: over %d bytes]", maxLogBodySize)
+	}
+
 	decoded, decompressed, notice := decodeForLog(body, contentEncoding)
 
 	// The notice goes first. A body that could not be decoded is still shown
@@ -360,6 +370,26 @@ func logResponseError(err error, counter int64, elapsed time.Duration) {
 	log.Printf("%s %s\n\n", coloredTime(time.Now(), color), line)
 }
 
+// streamErrorLogger logs the first read error of a streamed response body under
+// the response's counter. The failure happens after RoundTrip has returned, so
+// otherwise only httputil.ReverseProxy would report it, without the counter.
+// Only the proxy's copy loop reads the body, so no locking is needed.
+type streamErrorLogger struct {
+	r       io.Reader
+	counter int64
+	start   time.Time
+	logged  bool
+}
+
+func (s *streamErrorLogger) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) && !s.logged {
+		s.logged = true
+		logResponseError(err, s.counter, time.Since(s.start))
+	}
+	return n, err
+}
+
 // RoundTrip implements the http.RoundTripper interface.
 // It logs the outgoing request and incoming response with highlighted output.
 func (t DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -419,7 +449,8 @@ func (t DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	} else {
 		// Only the prefix was read, so the full size is known only from the header.
 		wireSize = response.ContentLength
-		response.Body = readCloser{Reader: io.MultiReader(bytes.NewReader(head), origBody), Closer: origBody}
+		rest := &streamErrorLogger{r: origBody, counter: counter, start: start}
+		response.Body = readCloser{Reader: io.MultiReader(bytes.NewReader(head), rest), Closer: origBody}
 	}
 	logResponse(response, formatBodyForLog(head, wireSize,
 		response.Header.Get("Content-Encoding"), response.Header.Get("Content-Type")), counter, elapsed)

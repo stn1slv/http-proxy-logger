@@ -113,14 +113,15 @@ responses. Add `-no-color=true` to disable colored output. Flags `-target` and
 The proxy will forward traffic to the target and log each request/response pair
 using the format shown above.
 
-Each response marker shows the status and the time from sending the request upstream until the full response arrived (for protocol upgrades and event streams, until the headers arrived), for example `--- RESPONSE 3 (200 OK, 134ms) ---`. If the upstream cannot be reached or the response breaks off, the entry reads `--- RESPONSE 3 (upstream error: ..., 2ms) ---` instead, and `--- RESPONSE 3 (client canceled, 5ms) ---` if the client disconnected first. Every request has a matching response entry.
+Each response marker shows the status and the time from sending the request upstream until the full response arrived (for protocol upgrades and event streams, until the headers arrived; for bodies over the 1 MB log limit, until the first 1 MB arrived), for example `--- RESPONSE 3 (200 OK, 134ms) ---`. If the upstream cannot be reached or the response breaks off, the entry reads `--- RESPONSE 3 (upstream error: ..., 2ms) ---` instead, and `--- RESPONSE 3 (client canceled, 5ms) ---` if the client disconnected first. Every request has a matching response entry. A body over the log limit is streamed, so if it breaks off after the first 1 MB, the upstream error is logged as a second entry with the same number.
 
 ## Known limitations
 
-- **Responses are buffered before being forwarded.** Protocol upgrades
+- **Response bodies are buffered up to the 1 MB log limit** before being
+  forwarded; the rest of a larger body streams through. Protocol upgrades
   (WebSocket, `101 Switching Protocols`), `text/event-stream` responses, and any
-  response when `-responses=false` is set are streamed straight through instead,
-  but every other response is held in memory until it has been fully received.
+  response when `-responses=false` is set are streamed straight through without
+  any buffering.
 - **Request bodies are buffered too**, up to the 1 MB log limit, and the upstream
   request is not sent until that much has arrived. Streaming or interactive
   uploads are therefore delayed. Run with `-requests=false` to skip the capture
