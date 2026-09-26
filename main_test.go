@@ -1124,7 +1124,8 @@ func TestRoundTripLogsStreamedBodyFailure(t *testing.T) {
 		StatusCode: http.StatusOK,
 		Status:     "200 OK",
 		Proto:      "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
-		Header: http.Header{"Content-Type": {"text/plain"}},
+		Header:        http.Header{"Content-Type": {"text/plain"}},
+		ContentLength: -1, // what http.Transport reports for a body of unknown length
 		Body: &countingBody{Reader: io.MultiReader(
 			bytes.NewReader(bytes.Repeat([]byte("x"), maxLogBodySize+10)),
 			iotest.ErrReader(broken),
@@ -1138,8 +1139,42 @@ func TestRoundTripLogsStreamedBodyFailure(t *testing.T) {
 	if _, err := io.ReadAll(got.Body); !errors.Is(err, broken) {
 		t.Fatalf("read error = %v, want %v", err, broken)
 	}
-	if !strings.Contains(logs.String(), "(upstream error: connection reset") {
-		t.Errorf("log does not report the failure, got %q", logs.String())
+	// A second read fails again, but must not log a second time.
+	if _, err := got.Body.Read(make([]byte, 1)); !errors.Is(err, broken) {
+		t.Fatalf("second read error = %v, want %v", err, broken)
+	}
+
+	out := logs.String()
+	if n := strings.Count(out, "(upstream error: connection reset"); n != 1 {
+		t.Fatalf("failure logged %d times, want 1; log: %q", n, out)
+	}
+	markers := regexp.MustCompile(`--- RESPONSE (\d+) \(`).FindAllStringSubmatch(out, -1)
+	if len(markers) != 2 || markers[0][1] != markers[1][1] {
+		t.Errorf("want the response and its failure under one counter, got %v", markers)
+	}
+}
+
+func TestCaptureRequestBodySkipsDecodingTruncatedCapture(t *testing.T) {
+	// formatBodyForLog is shared with requests, so an oversized compressed upload
+	// is also reported by size rather than as a decode failure.
+	body := bytes.Repeat([]byte{0x1f}, maxLogBodySize+1)
+	r, err := http.NewRequest(http.MethodPost, "http://example.invalid/", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Header.Set("Content-Encoding", encodingGzip)
+
+	got := string(captureRequestBody(r))
+	if want := fmt.Sprintf("[body too large to display: %d bytes]", len(body)); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestFormatBodyForLogIgnoresImpossibleDeclaredSize(t *testing.T) {
+	// A declared length smaller than what already arrived cannot be right.
+	got := string(formatBodyForLog(bytes.Repeat([]byte("x"), maxLogBodySize+1), 0, "", "text/plain"))
+	if want := fmt.Sprintf("[body too large to display: over %d bytes]", maxLogBodySize); got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 

@@ -214,7 +214,8 @@ func formatBodyForLog(body []byte, wireSize int64, contentEncoding, contentType 
 	// to display whatever it decodes to, and decoding a cut-off compressed stream
 	// would fail with "unexpected EOF" and log a misleading error.
 	if len(body) > maxLogBodySize {
-		if wireSize >= 0 {
+		// A declared size smaller than what already arrived is wrong, so it is not shown.
+		if wireSize >= int64(len(body)) {
 			return fmt.Appendf(nil, "[body too large to display: %d bytes]", wireSize)
 		}
 		return fmt.Appendf(nil, "[body too large to display: over %d bytes]", maxLogBodySize)
@@ -230,15 +231,9 @@ func formatBodyForLog(body []byte, wireSize int64, contentEncoding, contentType 
 		notice += "\n"
 	}
 
-	if len(decoded) > maxLogBodySize {
-		switch {
-		case decompressed:
-			return fmt.Appendf(nil, "%s[decompressed body exceeds the %d byte log limit]", notice, maxLogBodySize)
-		case wireSize >= 0:
-			return fmt.Appendf(nil, "%s[body too large to display: %d bytes]", notice, wireSize)
-		default:
-			return fmt.Appendf(nil, "%s[body too large to display: over %d bytes]", notice, maxLogBodySize)
-		}
+	// body is within the limit here, so only decompression can make it larger.
+	if decompressed && len(decoded) > maxLogBodySize {
+		return fmt.Appendf(nil, "%s[decompressed body exceeds the %d byte log limit]", notice, maxLogBodySize)
 	}
 	return append([]byte(notice), highlightBody(decoded, contentType)...)
 }
