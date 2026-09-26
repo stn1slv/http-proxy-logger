@@ -2,6 +2,9 @@ name: Build & test
 
 on:
   push:
+    # A push filter that names only tags does not run for branch pushes, so
+    # branches must be listed as well for pushes to main to be tested.
+    branches: [ "**" ]
     tags-ignore: 'v*'
   pull_request:
     branches: [ "main" ]
