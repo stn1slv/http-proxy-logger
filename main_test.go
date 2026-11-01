@@ -62,6 +62,7 @@ func guardFlagVars(t *testing.T) {
 	setBool(t, &showVersion, showVersion)
 	setString(t, &cliTarget, cliTarget)
 	setString(t, &cliPort, cliPort)
+	setString(t, &filterURL, filterURL)
 }
 
 // compressGzip returns gzip-compressed bytes.
@@ -776,6 +777,93 @@ func TestRegisterFlagsVersion(t *testing.T) {
 			}
 			if !showVersion {
 				t.Errorf("%s did not set showVersion", arg)
+			}
+		})
+	}
+}
+
+func TestRegisterFlagsFilterURL(t *testing.T) {
+	guardFlagVars(t)
+	setString(t, &filterURL, "left over from another test")
+
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	registerFlags(fs)
+	if filterURL != "" {
+		t.Fatalf("filterURL = %q after registration, want empty default", filterURL)
+	}
+	if err := fs.Parse([]string{"-filter-url", "/api/"}); err != nil {
+		t.Fatal(err)
+	}
+	if filterURL != "/api/" {
+		t.Errorf("filterURL = %q, want %q", filterURL, "/api/")
+	}
+}
+
+func TestRoundTripFilterURL(t *testing.T) {
+	tests := []struct {
+		name       string
+		filter     string
+		url        string
+		wantLogged bool
+	}{
+		{name: "empty filter logs everything", filter: "", url: "http://example.invalid/health", wantLogged: true},
+		{name: "matching path is logged", filter: "/api/", url: "http://example.invalid/api/users", wantLogged: true},
+		{name: "non-matching path is not logged", filter: "/api/", url: "http://example.invalid/health", wantLogged: false},
+		{name: "query string is matched", filter: "debug=1", url: "http://example.invalid/health?debug=1", wantLogged: true},
+		{name: "upstream host is matched", filter: "example.invalid", url: "http://example.invalid/health", wantLogged: true},
+		{name: "match is case-sensitive", filter: "/API/", url: "http://example.invalid/api/users", wantLogged: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setNoColor(t, true)
+			setBool(t, &logRequests, true)
+			setBool(t, &logResponses, true)
+			setString(t, &filterURL, tt.filter)
+			logged := captureLog(t)
+
+			req, err := http.NewRequest(http.MethodGet, tt.url, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := reqCounter.Load()
+			resp, err := DebugTransport{Transport: fakeTransport{response: &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Proto:      "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
+				Header: http.Header{},
+				Body:   io.NopCloser(strings.NewReader("ok")),
+			}}}.RoundTrip(req)
+			if err != nil {
+				t.Fatalf("RoundTrip failed: %v", err)
+			}
+			defer resp.Body.Close()
+
+			// A filtered-out request is still proxied: the client gets the full body.
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(body) != "ok" {
+				t.Errorf("body = %q, want %q", body, "ok")
+			}
+
+			out := logged.String()
+			counted := reqCounter.Load() != before
+			if tt.wantLogged {
+				if !strings.Contains(out, "--- REQUEST ") || !strings.Contains(out, "--- RESPONSE ") {
+					t.Errorf("request was not logged, got:\n%s", out)
+				}
+				if !counted {
+					t.Error("request counter did not advance for a logged request")
+				}
+				return
+			}
+			if out != "" {
+				t.Errorf("filtered-out request was logged:\n%s", out)
+			}
+			if counted {
+				t.Error("request counter advanced for a filtered-out request")
 			}
 		})
 	}
