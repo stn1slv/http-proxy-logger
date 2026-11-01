@@ -837,7 +837,7 @@ func TestRoundTripFilterURL(t *testing.T) {
 			if err != nil {
 				t.Fatalf("RoundTrip failed: %v", err)
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			// A filtered-out request is still proxied: the client gets the full body.
 			body, err := io.ReadAll(resp.Body)
