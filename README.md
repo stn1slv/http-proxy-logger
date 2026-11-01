@@ -64,6 +64,7 @@ Each setting is resolved in this order: **CLI flag → environment variable → 
 | Log requests   | `-requests`   | —           | `true`                |
 | Log responses  | `-responses`  | —           | `true`                |
 | Disable color  | `-no-color`   | `NO_COLOR`  | `false`               |
+| Filter URL     | `-filter-url` | —           | empty (log all)       |
 
 `NO_COLOR` follows the [no-color.org](https://no-color.org/) convention: any
 non-empty value disables color. An empty value is ignored. Because CLI flags take
