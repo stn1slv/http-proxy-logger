@@ -64,10 +64,22 @@ Each setting is resolved in this order: **CLI flag → environment variable → 
 | Log requests   | `-requests`   | —           | `true`                |
 | Log responses  | `-responses`  | —           | `true`                |
 | Disable color  | `-no-color`   | `NO_COLOR`  | `false`               |
+| Filter URL     | `-filter-url` | —           | empty (log all)       |
 
 `NO_COLOR` follows the [no-color.org](https://no-color.org/) convention: any
 non-empty value disables color. An empty value is ignored. Because CLI flags take
 precedence, an explicit `-no-color=false` keeps colors on even when `NO_COLOR` is set.
+
+`-filter-url` limits logging to requests whose URL contains the given text.
+Other requests are still proxied, just not logged, and do not use up a request
+number. The match is a plain, case-sensitive substring test against the full
+upstream URL: the target's scheme, host and base path, the request path, and the
+query string. A filter that contains the target host therefore matches every
+request, and `/api` also matches `/apikeys`. For example:
+
+```sh
+http-proxy-logger -target https://test.com -filter-url /api/
+```
 
 The target URL must include a scheme and a host, and the port must be a number
 between 0 and 65535. The proxy reports the problem and exits if either is invalid.

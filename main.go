@@ -61,6 +61,7 @@ var (
 	cliPort      string
 	noColor      bool
 	showVersion  bool
+	filterURL    string
 )
 
 // registerFlags binds the configuration variables to fs. It is called from main
@@ -70,6 +71,7 @@ func registerFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&logResponses, "responses", true, "log HTTP responses")
 	fs.StringVar(&cliTarget, "target", "", "upstream target URL (overrides TARGET)")
 	fs.StringVar(&cliPort, "port", "", "listen port (overrides PORT)")
+	fs.StringVar(&filterURL, "filter-url", "", "only log requests whose URL contains this substring")
 	fs.BoolVar(&noColor, "no-color", false, "disable colored output")
 	fs.BoolVar(&showVersion, "version", false, "print the version and exit")
 	fs.BoolVar(&showVersion, "v", false, "print the version and exit (shorthand)")
@@ -388,6 +390,10 @@ func (s *streamErrorLogger) Read(p []byte) (int, error) {
 // RoundTrip implements the http.RoundTripper interface.
 // It logs the outgoing request and incoming response with highlighted output.
 func (t DebugTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if filterURL != "" && !strings.Contains(r.URL.String(), filterURL) {
+		return t.upstream().RoundTrip(r)
+	}
+
 	counter := reqCounter.Add(1)
 
 	if logRequests {
